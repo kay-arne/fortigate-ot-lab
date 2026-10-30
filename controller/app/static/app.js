@@ -4,6 +4,7 @@ const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 
 async function api(path, opts = {}) {
   const r = await fetch(location.origin + path, { headers: { "Content-Type": "application/json" }, ...opts });
+  if (r.status === 401) { location.href = "/login"; throw new Error("niet ingelogd"); }
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.detail || r.statusText);
   return body;
@@ -15,6 +16,7 @@ $$("nav button").forEach((b) => b.addEventListener("click", () => {
   $$("nav button").forEach((x) => x.classList.toggle("active", x === b));
   $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + b.dataset.tab));
   if (b.dataset.tab === "tests") loadScenarios();
+  if (b.dataset.tab === "setup") loadSettings();
 }));
 
 // --- job log ---------------------------------------------------------------
@@ -69,27 +71,96 @@ function renderLab(lab) {
 }
 
 // --- setup -----------------------------------------------------------------
-function renderSettings(s) {
-  $("#cur-image").textContent = s.fgt_image || "-";
-  $("#cur-license").textContent = s.license_file || "-";
-  $("#cur-token").textContent = s.fortiflex_token_set ? "ja" : "nee";
-  $("#cur-pw").textContent = s.admin_password_set ? "ja" : "nee";
+const fmtSize = (b) => (b > 1e9 ? (b / 1e9).toFixed(2) + " GB" : (b / 1e6).toFixed(1) + " MB");
+
+function renderChecks(checks) {
+  $("#checklist").innerHTML = checks.map((c) =>
+    `<li class="${c.ok ? "ok" : c.optional ? "opt" : "todo"}">${c.ok ? "✓" : c.optional ? "○" : "•"} ${esc(c.label)}${c.optional ? " <small>(optioneel)</small>" : ""}</li>`).join("");
+  checks.forEach((c) => {
+    const b = $(`.badge[data-check=${c.id}]`);
+    if (!b) return;
+    b.className = "badge " + (c.ok ? "ok" : c.optional ? "opt" : "todo");
+    b.textContent = c.ok ? "ingesteld" : c.optional ? "optioneel" : "nog invullen";
+  });
+}
+
+// Vult de formulieren; alleen bij laden en na opslaan, zodat polling je invoer niet overschrijft.
+function fillSettings(s) {
+  renderChecks(s.checks);
+  $("#cur-image").textContent = s.fgt_image ? `${s.fgt_image} (${fmtSize(s.fgt_image_size || 0)})` : "geen";
+  $("#cur-license").textContent = s.license_file || "geen";
+  $("#i-wanmode").value = s.wan.mode || "static";
+  $("#i-wanip").value = s.wan.ip || "";
+  $("#i-wangw").value = s.wan.gateway || "";
+  $("#i-mgmtip").value = s.fgt_mgmt_ip || "";
+  $("#i-adminpw").value = s.fgt_admin_password || "";
+  $("#o-apikey").value = s.fgt_api_key || "";
+  $("#i-token").value = s.fortiflex_token || "";
   const lic = $(`input[name=lic][value=${s.license_mode || "none"}]`);
-  if (lic && !document.activeElement.closest("#tab-setup")) lic.checked = true;
-  if (s.wan && !$("#i-wanip").value) {
-    $("#i-wanmode").value = s.wan.mode || "static";
-    $("#i-wanip").value = s.wan.ip || "";
-    $("#i-wangw").value = s.wan.gateway || "";
-  }
-  if (s.fgt_mgmt_ip && !$("#i-mgmtip").value) $("#i-mgmtip").value = s.fgt_mgmt_ip;
+  if (lic) lic.checked = true;
+  toggleWan();
   toggleLic();
 }
+
+async function loadSettings() {
+  fillSettings(await api("/api/settings"));
+}
+
+function toggleWan() {
+  const mode = $("#i-wanmode").value;
+  $$("[data-wan]").forEach((el) => (el.hidden = el.dataset.wan !== mode));
+}
+$("#i-wanmode").addEventListener("change", toggleWan);
+
 function toggleLic() {
   const v = ($("input[name=lic]:checked") || {}).value;
   $("#lic-file").hidden = v !== "file";
   $("#lic-flex").hidden = v !== "fortiflex";
 }
 $$("input[name=lic]").forEach((r) => r.addEventListener("change", toggleLic));
+
+// oogje: wachtwoord/token tonen of verbergen
+$$("[data-eye]").forEach((b) => b.addEventListener("click", () => {
+  const input = $("#" + b.dataset.eye);
+  input.type = input.type === "password" ? "text" : "password";
+  b.classList.toggle("open", input.type === "text");
+}));
+$$("[data-copy]").forEach((b) => b.addEventListener("click", async () => {
+  const v = $("#" + b.dataset.copy).value;
+  if (!v) return;
+  try { await navigator.clipboard.writeText(v); b.textContent = "Gekopieerd"; }
+  catch { b.textContent = "Niet gelukt"; }
+  setTimeout(() => (b.textContent = "Kopieer"), 1500);
+}));
+$("#btn-genpw").onclick = () => {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!#%+-";
+  const rnd = crypto.getRandomValues(new Uint32Array(16));
+  $("#i-adminpw").value = Array.from(rnd, (n) => chars[n % chars.length]).join("");
+  $("#i-adminpw").type = "text";
+  $("[data-eye=i-adminpw]").classList.add("open");
+};
+
+function showResult(key, ok, msg) {
+  const el = $(`[data-result=${key}]`);
+  el.className = "result " + (ok ? "ok" : "bad");
+  el.textContent = msg;
+  if (ok) setTimeout(() => (el.textContent = ""), 4000);
+}
+
+const savePayload = {
+  wan: () => ({ wan_mode: $("#i-wanmode").value, wan_ip: $("#i-wanip").value.trim(),
+                wan_gateway: $("#i-wangw").value.trim(), fgt_mgmt_ip: $("#i-mgmtip").value.trim() }),
+  admin: () => ({ admin_password: $("#i-adminpw").value }),
+  license: () => ({ license_mode: ($("input[name=lic]:checked") || {}).value || "none",
+                    fortiflex_token: $("#i-token").value.trim() || null }),
+};
+$$("[data-save]").forEach((b) => b.addEventListener("click", async () => {
+  const key = b.dataset.save;
+  try {
+    fillSettings(await post("/api/settings", savePayload[key]()));
+    showResult(key, true, "Opgeslagen");
+  } catch (e) { showResult(key, false, e.message); }
+}));
 
 function upload(inputSel, url, progressSel) {
   const file = $(inputSel).files[0];
@@ -100,27 +171,58 @@ function upload(inputSel, url, progressSel) {
     $(progressSel).hidden = false;
     xhr.upload.onprogress = (e) => ($(progressSel).value = (e.loaded / e.total) * 100);
   }
-  xhr.onload = () => { if (xhr.status >= 400) alert(xhr.responseText); refresh(); };
+  xhr.onload = () => {
+    if (xhr.status === 401) return (location.href = "/login");
+    if (xhr.status >= 400) alert(xhr.responseText);
+    else fillSettings(JSON.parse(xhr.responseText));
+    if (progressSel) $(progressSel).hidden = true;
+  };
   xhr.send(file);
 }
 $("#btn-upload-image").onclick = () => upload("#f-image", "/api/upload/image", "#p-image");
 $("#btn-upload-license").onclick = () => upload("#f-license", "/api/upload/license");
 
-$("#btn-save").onclick = async () => {
+// --- Proxmox-verbinding ------------------------------------------------------
+function secretRow(id, value) {
+  return `<div class="secret"><input id="${id}" type="password" readonly value="${esc(value)}">
+    <button class="eye" data-eye="${id}" type="button" title="Tonen/verbergen"></button></div>`;
+}
+async function loadHost() {
+  const h = await api("/api/host");
+  if (!h.configured) {
+    $("#host-info").innerHTML = `<p class="warn">Geen <code>host.json</code> gevonden: draai de installer op de Proxmox host.</p>`;
+    return;
+  }
+  const rows = [
+    ["Proxmox host", `${esc(h.node)} <span class="mono">${esc(h.host)}</span>`, "Adres waarop de controller via SSH (TCP 22) inlogt."],
+    ["SSH-gebruiker", `<span class="mono">${esc(h.ssh_user)}</span> ${h.sudo ? '<span class="tag">sudo: qm, pct, pvesh</span>' : '<span class="tag warn">root</span>'}`,
+      h.sudo ? "Aparte gebruiker; intrekken met <code>otlab-revoke</code> op de host." : "Sleutel staat bij root; intrekken met <code>otlab-revoke</code> op de host."],
+    ["SSH-sleutel", `<span class="mono">${esc(h.ssh_key)}</span>`, "Private key in deze controller; de publieke sleutel staat op de host."],
+    ["Werkmap op host", `<span class="mono">${esc(h.workdir)}</span>`, "Hier komen het FortiGate-image en de config-ISO."],
+    ["Lab-storage", `<span class="mono">${esc(h.storage)}</span>`, "Disks van de FortiGate en de OT-containers."],
+    ["LXC-template", `<span class="mono">${esc(h.template)}</span>`, "Debian-basis voor het OT-template."],
+    ["FortiGate uplink", `<span class="mono">${esc(h.uplink_bridge)}</span>${h.uplink_vlan ? ` VLAN <span class="mono">${esc(h.uplink_vlan)}</span>` : " (geen VLAN)"}`, "Bridge van port1 naar je fysieke netwerk."],
+    ["Template-build", `<span class="mono">${esc(h.template_net)}</span>`, "Tijdelijk netwerk om packages te downloaden."],
+    ["VMID's", `lab <span class="mono">${esc(h.vmid_range)}</span> · FortiGate ${h.fortigate_vmid} · template ${h.template_vmid} · controller ${esc(h.controller_ctid)}`, ""],
+    ["Web UI-login", `<span class="mono">admin</span> / ${secretRow("o-uipw", h.ui_password)}`, "Ook te vinden in de controller: <code>/opt/otlab/data/ui_password</code>."],
+  ];
+  $("#host-info").innerHTML = `<table class="kv">${rows.map(([k, v, hint]) =>
+    `<tr><th>${k}</th><td>${v}${hint ? `<div class="hint">${hint}</div>` : ""}</td></tr>`).join("")}</table>`;
+  $("#wan-bridge").textContent = h.uplink_bridge + (h.uplink_vlan ? ` (VLAN ${h.uplink_vlan})` : "");
+  $$("#host-info [data-eye]").forEach((b) => b.addEventListener("click", () => {
+    const input = $("#" + b.dataset.eye);
+    input.type = input.type === "password" ? "text" : "password";
+    b.classList.toggle("open", input.type === "text");
+  }));
+}
+$("#btn-host-test").onclick = async () => {
+  const el = $("#host-test-result");
+  el.className = "result"; el.textContent = "testen…";
   try {
-    await post("/api/settings", {
-      wan_mode: $("#i-wanmode").value,
-      wan_ip: $("#i-wanip").value.trim(),
-      wan_gateway: $("#i-wangw").value.trim(),
-      fgt_mgmt_ip: $("#i-mgmtip").value.trim(),
-      admin_password: $("#i-adminpw").value || null,
-      license_mode: ($("input[name=lic]:checked") || {}).value,
-      fortiflex_token: $("#i-token").value.trim() || null,
-    });
-    $("#i-adminpw").value = ""; $("#i-token").value = "";
-    refresh();
-    alert("Opgeslagen");
-  } catch (e) { alert(e.message); }
+    const r = await post("/api/host/test");
+    el.className = "result " + (r.ok ? "ok" : "bad");
+    el.textContent = r.detail;
+  } catch (e) { el.className = "result bad"; el.textContent = e.message; }
 };
 
 // --- acties ----------------------------------------------------------------
@@ -161,7 +263,7 @@ $("#btn-adhoc").onclick = () => action("/api/adhoc", { node: $("#adhoc-node").va
 async function refresh() {
   try {
     const st = await api("/api/status");
-    renderSettings(st.settings);
+    renderChecks(st.settings.checks);
     renderLab(st.lab);
     const hs = $("#hoststatus");
     hs.textContent = st.host_error ? "Proxmox: geen verbinding" : "Proxmox: verbonden";
@@ -169,5 +271,7 @@ async function refresh() {
     hs.title = st.host_error || "";
   } catch (e) { console.error(e); }
 }
+loadSettings();
+loadHost();
 refresh();
 setInterval(refresh, 10000);

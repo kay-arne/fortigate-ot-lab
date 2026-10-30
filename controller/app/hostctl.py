@@ -1,4 +1,9 @@
-"""SSH-koppeling naar de Proxmox host (qm / pct / pvesh)."""
+"""SSH-koppeling naar de Proxmox host (qm / pct / pvesh).
+
+De installer maakt hiervoor standaard een aparte gebruiker (bijv. 'otlab')
+aan die via sudo alleen qm, pct, pvesh en het plaatsen van de config-ISO mag.
+Bij de root-variant wordt sudo overgeslagen.
+"""
 from __future__ import annotations
 
 import shlex
@@ -13,6 +18,10 @@ class HostError(RuntimeError):
     pass
 
 
+# commando's die root nodig hebben (komen overeen met /etc/sudoers.d/otlab)
+PRIVILEGED = {"qm", "pct", "pvesh", "install"}
+
+
 class Host:
     def __init__(self):
         self.cfg = load_host()
@@ -22,6 +31,15 @@ class Host:
     @property
     def node(self) -> str:
         return self.cfg["node"]
+
+    @property
+    def workdir(self) -> str:
+        """Map op de host waar de controller zelf mag schrijven (images, ISO, tarballs)."""
+        return self.cfg.get("workdir", "/var/lib/vz/otlab")
+
+    @property
+    def sudo(self) -> str:
+        return "" if self.cfg.get("ssh_user", "root") == "root" else "sudo -n "
 
     def _connect(self) -> paramiko.SSHClient:
         if self._client and self._client.get_transport() and self._client.get_transport().is_active():
@@ -41,7 +59,8 @@ class Host:
     def run(self, cmd, check=True, timeout=900, log=None) -> str:
         """Voer een commando uit op de host. cmd mag een lijst of string zijn."""
         if isinstance(cmd, (list, tuple)):
-            cmd = " ".join(shlex.quote(str(c)) for c in cmd)
+            prefix = self.sudo if cmd[0] in PRIVILEGED else ""
+            cmd = prefix + " ".join(shlex.quote(str(c)) for c in cmd)
         if log:
             log(f"$ {cmd}")
         with self._lock:
@@ -60,16 +79,6 @@ class Host:
         sftp = client.open_sftp()
         try:
             sftp.put(str(local_path), remote_path, callback=callback)
-        finally:
-            sftp.close()
-
-    def put_text(self, text: str, remote_path: str):
-        with self._lock:
-            client = self._connect()
-        sftp = client.open_sftp()
-        try:
-            with sftp.open(remote_path, "w") as f:
-                f.write(text)
         finally:
             sftp.close()
 
@@ -93,7 +102,7 @@ class Host:
 
     def pct_exec(self, vmid: int, command: str, timeout=300, check=False) -> tuple[int, str]:
         """Draai een shell-commando in een LXC; geeft (rc, output) terug."""
-        full = f"pct exec {vmid} -- bash -lc {shlex.quote(command)} 2>&1; echo \"__rc=$?\""
+        full = f"{self.sudo}pct exec {vmid} -- bash -lc {shlex.quote(command)} 2>&1; echo \"__rc=$?\""
         out = self.run(full, check=False, timeout=timeout)
         body, _, rc = out.rpartition("__rc=")
         code = int(rc.strip() or 1)

@@ -13,6 +13,7 @@
 #   CTID CT_HOSTNAME CT_CORES CT_MEMORY CT_DISK CT_STORAGE TPL_STORAGE
 #   CT_BRIDGE CT_VLAN CT_IP CT_GW CT_DNS UI_PORT
 #   LAB_STORAGE LAB_BRIDGE LAB_VLAN LAB_VMID_BASE TEMPLATE_NET HOST_IP
+#   HOST_ACCESS (user|root, default user)  HOST_USER (default otlab)
 #   REPO_URL REPO_BRANCH
 set -euo pipefail
 
@@ -126,6 +127,9 @@ LAB_BRIDGE="${LAB_BRIDGE:-}"
 LAB_VLAN="${LAB_VLAN-__same__}"
 LAB_VMID_BASE="${LAB_VMID_BASE:-9100}"
 TEMPLATE_NET="${TEMPLATE_NET:-}"
+HOST_ACCESS="${HOST_ACCESS:-user}"
+HOST_USER="${HOST_USER:-otlab}"
+WORKDIR="/var/lib/vz/otlab"
 HOST_IP="${HOST_IP:-$(ip -4 -o addr show "${DEF_ROUTE_DEV:-vmbr0}" | awk '{print $4}' | cut -d/ -f1 | head -n1)}"
 
 # --- wizard ------------------------------------------------------------------------
@@ -193,6 +197,26 @@ advanced_settings() {
   HOST_IP="$(ask_valid is_ip "Proxmox host" "IP waarop de controller deze host via SSH bereikt:" "$HOST_IP")"
 }
 
+access_settings() {  # $1 = advanced (1/0)
+  if w_yesno "Toegang tot deze host" "De controller beheert deze Proxmox host via SSH (qm, pct, pvesh).
+
+Aanbevolen: een aparte gebruiker met een eigen SSH-sleutel en sudo-rechten voor alleen die commando's. De toegang trek je later in met: otlab-revoke
+
+Ja  = aparte gebruiker aanmaken (sudo wordt zo nodig geinstalleerd)
+Nee = sleutel aan root koppelen"; then
+    HOST_ACCESS=user
+    if [[ $1 == 1 ]]; then
+      while true; do
+        HOST_USER="$(w_input "Toegang tot deze host" "Naam van de gebruiker op de host:" "$HOST_USER")"
+        [[ $HOST_USER =~ ^[a-z_][a-z0-9_-]{0,30}$ && $HOST_USER != root ]] && break
+        w_msg "Toegang tot deze host" "Ongeldige gebruikersnaam: '$HOST_USER'"
+      done
+    fi
+  else
+    HOST_ACCESS=root
+  fi
+}
+
 finalize_defaults() {
   LAB_STORAGE="${LAB_STORAGE:-$CT_STORAGE}"
   LAB_BRIDGE="${LAB_BRIDGE:-$CT_BRIDGE}"
@@ -214,6 +238,7 @@ Lab
   Template-net  : $TEMPLATE_NET
   VMID's        : $LAB_VMID_BASE - $(( LAB_VMID_BASE + 99 ))
   Proxmox host  : $NODE ($HOST_IP)
+  Host-toegang  : $([[ $HOST_ACCESS == user ]] && echo "gebruiker $HOST_USER (sudo: qm, pct, pvesh)" || echo "root")$([[ $CT_IP == dhcp ]] && echo ", sleutel niet aan IP gebonden (DHCP)")
 EOF
 }
 
@@ -227,6 +252,7 @@ else
     mode="$(w_menu "Installatie" "Hoe wil je installeren?" default \
       default "Standaard instellingen" advanced "Geavanceerd (storage, netwerk, VLAN, IP, ...)")"
     [[ $mode == advanced ]] && advanced_settings
+    access_settings "$([[ $mode == advanced ]] && echo 1 || echo 0)"
     finalize_defaults
     whiptail --backtitle "$TITLE" --title "Samenvatting" --yes-button "Installeren" --no-button "Aanpassen" \
       --yesno "$(summary)" 24 78 && break
@@ -245,6 +271,8 @@ done
 [[ -n $CT_STORAGE && -n $TPL_STORAGE && -n $LAB_STORAGE ]] || die "Kon geen geschikte storage bepalen."
 is_vlan "$CT_VLAN" && is_vlan "$LAB_VLAN" || die "Ongeldige VLAN-tag."
 [[ -n $HOST_IP ]] || die "Kon het IP van de host niet bepalen (zet HOST_IP=...)."
+[[ $HOST_ACCESS == user || $HOST_ACCESS == root ]] || die "HOST_ACCESS moet 'user' of 'root' zijn."
+[[ $HOST_ACCESS == root || ( $HOST_USER =~ ^[a-z_][a-z0-9_-]{0,30}$ && $HOST_USER != root ) ]] || die "Ongeldige HOST_USER."
 
 # --- Debian template -------------------------------------------------------------------
 c_info "Debian 12 LXC-template ophalen naar $TPL_STORAGE..."
@@ -294,22 +322,106 @@ pct exec "$CTID" -- git clone --depth 1 -b "$REPO_BRANCH" "$REPO_URL" /opt/otlab
 pct exec "$CTID" -- bash -c "python3 -m venv /opt/otlab/.venv && /opt/otlab/.venv/bin/pip install -q -r /opt/otlab/controller/requirements.txt"
 
 # --- koppeling controller -> Proxmox host -----------------------------------------------
-# De controller beheert de host via SSH (qm/pct/pvesh). De sleutel wordt
-# beperkt tot het IP van de controller.
-c_info "SSH-sleutel koppelen aan de Proxmox host..."
+# De controller beheert de host via SSH (qm/pct/pvesh). Standaard met een
+# aparte gebruiker en een sudo-regel voor alleen die commando's; intrekken
+# met /usr/local/sbin/otlab-revoke.
+c_info "SSH-sleutel aanmaken in de controller..."
 pct exec "$CTID" -- bash -c "mkdir -p /opt/otlab/data && ssh-keygen -q -t ed25519 -N '' -C otlab-controller -f /opt/otlab/data/id_ed25519"
 PUBKEY="$(pct exec "$CTID" -- cat /opt/otlab/data/id_ed25519.pub)"
-mkdir -p /root/.ssh && chmod 700 /root/.ssh
-sed -i '/otlab-controller$/d' /root/.ssh/authorized_keys 2>/dev/null || true
-echo "from=\"$CT_ADDR\" $PUBKEY" >> /root/.ssh/authorized_keys
-chmod 600 /root/.ssh/authorized_keys
+KEY_OPTS="no-agent-forwarding,no-port-forwarding,no-X11-forwarding"
+# Bij DHCP kan het IP veranderen; dan binden we de sleutel niet aan het adres.
+[[ $CT_IP != dhcp ]] && KEY_OPTS="from=\"$CT_ADDR\",$KEY_OPTS"
+
+install -d -m 755 /var/lib/vz/template/iso
+
+setup_access_user() {
+  c_info "Gebruiker '$HOST_USER' inrichten op de host..."
+  if ! command -v sudo >/dev/null; then
+    c_info "sudo installeren..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -yq sudo >/dev/null
+  fi
+  id "$HOST_USER" >/dev/null 2>&1 || useradd --system --create-home --home-dir "/var/lib/$HOST_USER" \
+    --shell /bin/bash --comment "FortiGate OT Lab controller" "$HOST_USER"
+  local home
+  home="$(getent passwd "$HOST_USER" | cut -d: -f6)"
+  install -d -m 700 -o "$HOST_USER" -g "$HOST_USER" "$home/.ssh"
+  echo "$KEY_OPTS $PUBKEY" > "$home/.ssh/authorized_keys"
+  chown "$HOST_USER:$HOST_USER" "$home/.ssh/authorized_keys"
+  chmod 600 "$home/.ssh/authorized_keys"
+  install -d -m 750 -o "$HOST_USER" -g "$HOST_USER" "$WORKDIR"
+
+  local tmp=/etc/sudoers.d/.otlab.tmp
+  cat > "$tmp" <<EOF
+# FortiGate OT Lab controller (CT $CTID). Intrekken met: otlab-revoke
+Defaults:$HOST_USER !requiretty
+$HOST_USER ALL=(root) NOPASSWD: $(command -v qm), $(command -v pct), $(command -v pvesh), \\
+  $(command -v install) -m 0644 $WORKDIR/otlab-fgt-config.iso /var/lib/vz/template/iso/otlab-fgt-config.iso
+EOF
+  chmod 440 "$tmp"
+  visudo -cf "$tmp" >/dev/null || { rm -f "$tmp"; die "Ongeldige sudo-regel gegenereerd."; }
+  mv "$tmp" /etc/sudoers.d/otlab
+}
+
+setup_access_root() {
+  c_info "Sleutel koppelen aan root..."
+  # Op Proxmox is /root/.ssh/authorized_keys een symlink naar
+  # /etc/pve/priv/authorized_keys (gedeeld in een cluster): het doelbestand
+  # in place bijwerken zodat de symlink intact blijft.
+  mkdir -p /root/.ssh && chmod 700 /root/.ssh
+  local ak tmp
+  ak="$(readlink -f /root/.ssh/authorized_keys)"
+  tmp="$(mktemp)"
+  grep -v 'otlab-controller$' "$ak" > "$tmp" 2>/dev/null || true
+  echo "$KEY_OPTS $PUBKEY" >> "$tmp"
+  cat "$tmp" > "$ak"
+  rm -f "$tmp"
+  install -d -m 750 "$WORKDIR"
+}
+
+install_revoke() {
+  cat > /usr/local/sbin/otlab-revoke <<'EOF'
+#!/usr/bin/env bash
+# Trekt de toegang van de FortiGate OT Lab controller tot deze host in.
+# Lab-VM's, containers en de controller zelf blijven bestaan.
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "Draai als root." >&2; exit 1; }
+HOST_USER="__HOST_USER__"
+if [[ -n $HOST_USER ]] && id "$HOST_USER" >/dev/null 2>&1; then
+  pkill -u "$HOST_USER" 2>/dev/null || true
+  userdel -r "$HOST_USER" 2>/dev/null || userdel "$HOST_USER"
+  echo "Gebruiker $HOST_USER verwijderd."
+fi
+rm -f /etc/sudoers.d/otlab
+ak="$(readlink -f /root/.ssh/authorized_keys)"
+if [[ -f $ak ]] && grep -q 'otlab-controller$' "$ak"; then
+  tmp="$(mktemp)"
+  grep -v 'otlab-controller$' "$ak" > "$tmp" || true
+  cat "$tmp" > "$ak"
+  rm -f "$tmp"
+  echo "Sleutel uit root authorized_keys verwijderd."
+fi
+echo "Toegang van de OT Lab controller ingetrokken."
+EOF
+  sed -i "s/__HOST_USER__/$([[ $HOST_ACCESS == user ]] && echo "$HOST_USER")/" /usr/local/sbin/otlab-revoke
+  chmod 750 /usr/local/sbin/otlab-revoke
+}
+
+if [[ $HOST_ACCESS == user ]]; then
+  setup_access_user
+  SSH_USER="$HOST_USER"
+else
+  setup_access_root
+  SSH_USER=root
+fi
+install_revoke
 
 pct exec "$CTID" -- bash -c "cat > /opt/otlab/data/host.json" <<EOF
 {
   "host": "$HOST_IP",
   "node": "$NODE",
-  "ssh_user": "root",
+  "ssh_user": "$SSH_USER",
   "ssh_key": "/opt/otlab/data/id_ed25519",
+  "workdir": "$WORKDIR",
   "storage": "$LAB_STORAGE",
   "template": "$TPL_REF",
   "controller_ctid": $CTID,
@@ -323,8 +435,10 @@ EOF
 UI_PASSWORD="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16 || true)"
 pct exec "$CTID" -- bash -c "umask 077; echo '$UI_PASSWORD' > /opt/otlab/data/ui_password"
 
-pct exec "$CTID" -- bash -c "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -i /opt/otlab/data/id_ed25519 root@$HOST_IP true" \
-  || die "Controller ($CT_ADDR) kan niet via SSH naar de host ($HOST_IP). Routing/firewall tussen VLAN's?"
+c_info "Verbinding controller -> host testen..."
+SUDO=""; [[ $SSH_USER != root ]] && SUDO="sudo -n "
+pct exec "$CTID" -- bash -c "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -i /opt/otlab/data/id_ed25519 $SSH_USER@$HOST_IP '${SUDO}pvesh get /version >/dev/null'" \
+  || die "Controller ($CT_ADDR) kan niet als $SSH_USER via SSH (en sudo) naar de host ($HOST_IP). Routing/firewall tussen VLAN's?"
 
 # --- systemd service ----------------------------------------------------------------------
 pct exec "$CTID" -- bash -c "cat > /etc/systemd/system/otlab.service" <<EOF
@@ -349,5 +463,6 @@ c_ok "Klaar."
 echo
 echo "  Web UI:  http://$CT_ADDR:$UI_PORT"
 echo "  Login:   admin / $UI_PASSWORD   (staat ook in CT $CTID: /opt/otlab/data/ui_password)"
+echo "  Host:    controller beheert $NODE als '$SSH_USER'; intrekken met: otlab-revoke"
 echo "  Volgende stap: upload het FortiGate-VM (KVM) qcow2-image + licentie in de UI en klik 'Deploy lab'."
 echo

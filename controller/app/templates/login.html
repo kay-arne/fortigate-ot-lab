@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inloggen - FortiGate OT Lab</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+  <form class="login-card" method="post" action="/login">
+    <h1>FortiGate OT Lab</h1>
+    <p class="help">Log in op de lab-controller.</p>
+    <!--ERROR-->
+    <div class="field">
+      <label for="username">Gebruikersnaam</label>
+      <input id="username" name="username" value="admin" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label for="password">Wachtwoord</label>
+      <div class="secret">
+        <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+        <button class="eye" type="button" title="Tonen/verbergen"
+          onclick="const i=document.getElementById('password');i.type=i.type==='password'?'text':'password';this.classList.toggle('open')"></button>
+      </div>
+      <div class="hint">Het wachtwoord staat in de uitvoer van de installer en in de controller:
+        <code>/opt/otlab/data/ui_password</code>.</div>
+    </div>
+    <button class="primary login-submit" type="submit">Inloggen</button>
+  </form>
+</body>
+</html>

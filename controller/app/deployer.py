@@ -15,7 +15,6 @@ from .config import (ROOT, UPLOADS, get_state, inventory, load_host, load_topolo
                      uplink_tag)
 from .hostctl import HostError, host
 
-REMOTE_DIR = "/var/lib/vz/otlab"
 ISO_NAME = "otlab-fgt-config.iso"
 PIP_PACKAGES = "pymodbus==3.7.4 python-snap7==1.3 asyncua==1.1.5 flask==3.1.0"
 APT_PACKAGES = "python3-venv python3-pip nmap curl netcat-openbsd openssh-server tcpdump iproute2"
@@ -99,8 +98,7 @@ def deploy_fortigate(log, topo):
         log(f"FortiGate VM {vmid} bestaat al, overslaan")
         return
 
-    h.run(["mkdir", "-p", REMOTE_DIR])
-    remote_img = f"{REMOTE_DIR}/{image}"
+    remote_img = f"{h.workdir}/{image}"
     if h.run(f"test -f {shlex.quote(remote_img)} && echo yes", check=False).strip() != "yes":
         log(f"image {image} naar de host kopiëren...")
         last = [0]
@@ -114,8 +112,8 @@ def deploy_fortigate(log, topo):
 
     log("cloud-init config drive bouwen (bootstrap + licentie)")
     iso_local = build_config_iso(topo, state)
-    h.run("mkdir -p /var/lib/vz/template/iso")
-    h.put(iso_local, f"/var/lib/vz/template/iso/{ISO_NAME}")
+    h.put(iso_local, f"{h.workdir}/{ISO_NAME}")
+    h.run(["install", "-m", "0644", f"{h.workdir}/{ISO_NAME}", f"/var/lib/vz/template/iso/{ISO_NAME}"])
 
     storage = hcfg["storage"]
     args = ["qm", "create", str(vmid), "--name", fgt["name"],
@@ -173,8 +171,8 @@ def _otsim_tarball() -> Path:
 def push_otsim(log, vmid):
     h = host()
     tgz = _otsim_tarball()
-    h.put(tgz, "/tmp/otsim.tgz")
-    h.run(["pct", "push", str(vmid), "/tmp/otsim.tgz", "/tmp/otsim.tgz"])
+    h.put(tgz, f"{h.workdir}/otsim.tgz")
+    h.run(["pct", "push", str(vmid), f"{h.workdir}/otsim.tgz", "/tmp/otsim.tgz"])
     h.pct_exec(vmid, "mkdir -p /opt/otsim && rm -rf /opt/otsim/otsim && tar xzf /tmp/otsim.tgz -C /opt/otsim "
                      "&& install -m644 /opt/otsim/otsim/otsim.service /etc/systemd/system/otsim.service "
                      "&& systemctl daemon-reload", check=True)

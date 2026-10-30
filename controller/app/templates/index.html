@@ -10,16 +10,169 @@
 <header>
   <h1>FortiGate OT Lab</h1>
   <nav>
-    <button data-tab="lab" class="active">Lab</button>
-    <button data-tab="setup">Setup</button>
-    <button data-tab="tests">Testcenter</button>
+    <button data-tab="setup" class="active">1. Setup</button>
+    <button data-tab="lab">2. Lab</button>
+    <button data-tab="tests">3. Testcenter</button>
   </nav>
   <span id="hoststatus" class="pill">…</span>
+  <form method="post" action="/logout" class="logout"><button type="submit" class="ghost">Uitloggen</button></form>
 </header>
 
 <main>
+  <!-- SETUP -->
+  <section id="tab-setup" class="tab active">
+    <div class="intro">
+      <p>Vul de stappen hieronder in. Zodra alle verplichte onderdelen groen zijn, kun je onder
+        <b>2. Lab</b> het lab uitrollen. Elke kaart heeft een eigen <b>Opslaan</b>-knop.</p>
+      <ul id="checklist" class="checklist"></ul>
+    </div>
+
+    <!-- 1. Proxmox -->
+    <div class="card" id="card-host">
+      <div class="card-head">
+        <h2><span class="step">1</span> Proxmox-verbinding</h2>
+        <span class="badge" data-check="host"></span>
+      </div>
+      <p class="help">De controller beheert de Proxmox host via <b>SSH</b>: hij voert daar <code>qm</code>,
+        <code>pct</code> en <code>pvesh</code> uit en kopieert bestanden via SFTP. De OT-containers worden met
+        <code>pct exec</code> bediend, dus niet via het netwerk. Deze gegevens zijn door de installer vastgelegd
+        (<code>/opt/otlab/data/host.json</code>); wijzigen doe je door de installer opnieuw te draaien.</p>
+      <div id="host-info"></div>
+      <div class="actions">
+        <button id="btn-host-test">Verbinding testen</button>
+        <span id="host-test-result" class="result"></span>
+      </div>
+    </div>
+
+    <!-- 2. Image -->
+    <div class="card" id="card-image">
+      <div class="card-head">
+        <h2><span class="step">2</span> FortiGate-VM image</h2>
+        <span class="badge" data-check="image"></span>
+      </div>
+      <p class="help">Download in de Fortinet support portal (<i>Support → VM Images → FortiGate → KVM</i>) het
+        bestand <code>FGT_VM64_KVM-v7.6.x-...out.kvm.zip</code>, pak het uit en upload de
+        <code>fortios.qcow2</code>. Het image wordt naar de host gekopieerd bij het uitrollen.</p>
+      <div class="field">
+        <label for="f-image">qcow2-bestand</label>
+        <div class="row">
+          <input type="file" id="f-image" accept=".qcow2">
+          <button id="btn-upload-image">Uploaden</button>
+        </div>
+        <progress id="p-image" max="100" value="0" hidden></progress>
+        <div class="current">Huidig: <b id="cur-image">geen</b></div>
+      </div>
+    </div>
+
+    <!-- 3. WAN -->
+    <div class="card" id="card-wan">
+      <div class="card-head">
+        <h2><span class="step">3</span> FortiGate WAN (port1)</h2>
+        <span class="badge" data-check="wan"></span>
+      </div>
+      <p class="help">port1 is de <b>enige verbinding</b> tussen je fysieke netwerk en het OT-lab. Hij hangt aan
+        <b id="wan-bridge">-</b>. Op dit adres bereik je de FortiGate-GUI en via dit adres praat de controller met
+        de FortiGate REST API. Wijzigingen gelden bij de eerstvolgende uitrol van de FortiGate.</p>
+      <div class="grid2">
+        <div class="field">
+          <label for="i-wanmode">Adressering</label>
+          <select id="i-wanmode">
+            <option value="static">Statisch IP (aanbevolen)</option>
+            <option value="dhcp">DHCP</option>
+          </select>
+          <div class="hint">Met een statisch IP kan de controller de FortiGate na de eerste boot direct vinden.</div>
+        </div>
+        <div class="field" data-wan="static">
+          <label for="i-wanip">IP-adres met prefix</label>
+          <input id="i-wanip" placeholder="192.168.1.250/24">
+          <div class="hint">Een vrij adres in het netwerk van de uplink-bridge.</div>
+        </div>
+        <div class="field" data-wan="static">
+          <label for="i-wangw">Default gateway</label>
+          <input id="i-wangw" placeholder="192.168.1.1">
+          <div class="hint">Router naar internet; nodig voor FortiGuard-updates en de licentie.</div>
+        </div>
+        <div class="field" data-wan="dhcp">
+          <label for="i-mgmtip">Management-IP</label>
+          <input id="i-mgmtip" placeholder="na de eerste boot invullen">
+          <div class="hint">Bij DHCP weet de controller het adres niet vooraf. Zoek het na de eerste boot op
+            (DHCP-server of FortiGate-console) en vul het hier in.</div>
+        </div>
+      </div>
+      <div class="actions"><button class="primary" data-save="wan">Opslaan</button><span class="result" data-result="wan"></span></div>
+    </div>
+
+    <!-- 4. Beheer -->
+    <div class="card" id="card-admin">
+      <div class="card-head">
+        <h2><span class="step">4</span> FortiGate-beheer</h2>
+        <span class="badge" data-check="admin"></span>
+      </div>
+      <p class="help">Het wachtwoord van gebruiker <code>admin</code> wordt bij de eerste boot via cloud-init gezet.
+        De controller gebruikt het om via SSH een REST API-gebruiker aan te maken; daarna werkt hij met de API-key.</p>
+      <div class="grid2">
+        <div class="field">
+          <label for="i-adminpw">Admin-wachtwoord</label>
+          <div class="secret">
+            <input id="i-adminpw" type="password" autocomplete="off" placeholder="minimaal 8 tekens">
+            <button class="eye" data-eye="i-adminpw" title="Tonen/verbergen" type="button"></button>
+            <button class="ghost" id="btn-genpw" type="button" title="Willekeurig wachtwoord">Genereer</button>
+          </div>
+          <div class="hint">Minimaal 8 tekens, geen aanhalingstekens. Na de uitrol wijzigen heeft geen effect op
+            een draaiende FortiGate.</div>
+        </div>
+        <div class="field">
+          <label for="o-apikey">REST API-key <span class="tag">automatisch</span></label>
+          <div class="secret">
+            <input id="o-apikey" type="password" readonly placeholder="nog niet aangemaakt">
+            <button class="eye" data-eye="o-apikey" title="Tonen/verbergen" type="button"></button>
+            <button class="ghost" data-copy="o-apikey" type="button">Kopieer</button>
+          </div>
+          <div class="hint">API-gebruiker <code>otlab-controller</code>, alleen toegestaan vanaf het IP van de
+            controller. Wordt na de eerste boot aangemaakt.</div>
+        </div>
+      </div>
+      <div class="actions"><button class="primary" data-save="admin">Opslaan</button><span class="result" data-result="admin"></span></div>
+    </div>
+
+    <!-- 5. Licentie -->
+    <div class="card" id="card-license">
+      <div class="card-head">
+        <h2><span class="step">5</span> Licentie</h2>
+        <span class="badge" data-check="license"></span>
+      </div>
+      <p class="help">De licentie gaat via de cloud-init config drive mee bij de eerste boot. Voor de OT-signatures
+        (industrial database) in application control en IPS is de <b>OT Security Service</b> nodig.</p>
+      <div class="choices">
+        <label class="choice"><input type="radio" name="lic" value="file">
+          <span><b>Licentiebestand</b><small>Een <code>.lic</code>-bestand uit FortiCare (geregistreerd VM-serienummer).</small></span></label>
+        <label class="choice"><input type="radio" name="lic" value="fortiflex">
+          <span><b>FortiFlex-token</b><small>Token uit het FortiFlex-portal; de FortiGate activeert zichzelf online.</small></span></label>
+        <label class="choice"><input type="radio" name="lic" value="none">
+          <span><b>Geen / later</b><small>Evaluatiemodus: beperkt, zonder FortiGuard en OT-signatures.</small></span></label>
+      </div>
+      <div id="lic-file" class="field">
+        <label for="f-license">Licentiebestand</label>
+        <div class="row">
+          <input type="file" id="f-license" accept=".lic">
+          <button id="btn-upload-license">Uploaden</button>
+        </div>
+        <div class="current">Huidig: <b id="cur-license">geen</b></div>
+      </div>
+      <div id="lic-flex" class="field">
+        <label for="i-token">FortiFlex-token</label>
+        <div class="secret">
+          <input id="i-token" type="password" autocomplete="off" placeholder="bijv. 1A2B3C4D5E6F7A8B9C0D">
+          <button class="eye" data-eye="i-token" title="Tonen/verbergen" type="button"></button>
+        </div>
+        <div class="hint">De FortiGate heeft internettoegang via port1 nodig om het token te activeren.</div>
+      </div>
+      <div class="actions"><button class="primary" data-save="license">Opslaan</button><span class="result" data-result="license"></span></div>
+    </div>
+  </section>
+
   <!-- LAB -->
-  <section id="tab-lab" class="tab active">
+  <section id="tab-lab" class="tab">
     <div class="toolbar">
       <button id="btn-deploy" class="primary">Deploy lab</button>
       <button id="btn-provision">FortiGate policies opnieuw toepassen</button>
@@ -27,50 +180,6 @@
       <button id="btn-destroy" class="danger">Afbreken…</button>
     </div>
     <div id="topology"></div>
-  </section>
-
-  <!-- SETUP -->
-  <section id="tab-setup" class="tab">
-    <div class="grid">
-      <div class="card">
-        <h2>1. FortiGate-VM image</h2>
-        <p class="muted">FortiGate-VM64-KVM (FortiOS 7.6.x) <code>fortios.qcow2</code> uit de Fortinet support portal.</p>
-        <input type="file" id="f-image" accept=".qcow2">
-        <button id="btn-upload-image">Uploaden</button>
-        <progress id="p-image" max="100" value="0" hidden></progress>
-        <p>Huidig: <b id="cur-image">-</b></p>
-      </div>
-
-      <div class="card">
-        <h2>2. Licentie</h2>
-        <label><input type="radio" name="lic" value="file"> Licentiebestand (.lic)</label>
-        <label><input type="radio" name="lic" value="fortiflex"> FortiFlex-token</label>
-        <label><input type="radio" name="lic" value="none"> Geen (evaluatie / later)</label>
-        <div id="lic-file" class="sub">
-          <input type="file" id="f-license" accept=".lic">
-          <button id="btn-upload-license">Uploaden</button>
-          <p>Huidig: <b id="cur-license">-</b></p>
-        </div>
-        <div id="lic-flex" class="sub">
-          <input type="text" id="i-token" placeholder="FortiFlex token" autocomplete="off">
-          <p class="muted">Token ingesteld: <b id="cur-token">nee</b></p>
-        </div>
-        <p class="muted">Let op: OT-signatures (industrial DB) vereisen de OT Security Service-entitlement.</p>
-      </div>
-
-      <div class="card">
-        <h2>3. FortiGate WAN (port1 → vmbr0)</h2>
-        <label>Modus
-          <select id="i-wanmode"><option value="static">statisch</option><option value="dhcp">DHCP</option></select>
-        </label>
-        <label>IP/prefix <input id="i-wanip" placeholder="192.168.1.250/24"></label>
-        <label>Gateway <input id="i-wangw" placeholder="192.168.1.1"></label>
-        <label>Mgmt-IP (alleen bij DHCP) <input id="i-mgmtip" placeholder="na boot invullen"></label>
-        <label>Admin-wachtwoord <input id="i-adminpw" type="password" placeholder="min. 8 tekens"></label>
-        <p class="muted">Wachtwoord ingesteld: <b id="cur-pw">nee</b></p>
-      </div>
-    </div>
-    <button id="btn-save" class="primary">Instellingen opslaan</button>
   </section>
 
   <!-- TESTS -->
@@ -81,11 +190,13 @@
     <div id="scenarios"></div>
     <div class="card">
       <h2>Ad-hoc test</h2>
-      <p class="muted">Bijv. <code>scan 10.20.0.0/24 22,80,502</code>, <code>tcp 10.30.0.10 8080</code>,
+      <p class="help">Bijv. <code>scan 10.20.0.0/24 22,80,502</code>, <code>tcp 10.30.0.10 8080</code>,
         <code>modbus-read 10.10.0.30 0 4</code>, <code>s7-read 10.10.0.20</code>, <code>http http://10.30.0.20/</code></p>
-      <select id="adhoc-node"></select>
-      <input id="adhoc-cmd" placeholder="otprobe-commando" size="40">
-      <button id="btn-adhoc">Uitvoeren</button>
+      <div class="row">
+        <select id="adhoc-node"></select>
+        <input id="adhoc-cmd" placeholder="otprobe-commando" size="40">
+        <button id="btn-adhoc">Uitvoeren</button>
+      </div>
     </div>
   </section>
 </main>

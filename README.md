@@ -45,6 +45,7 @@ geavanceerde modus vraagt de installer (whiptail-menu's met wat er op je host be
 | Netwerk tijdens de template-build (DHCP of tijdelijk IP) | DHCP |
 | VMID-reeks van het lab (100 ID's) | 9100–9199 |
 | IP waarop de controller de host via SSH bereikt | IP op de interface met de default route |
+| Aparte gebruiker voor de host-toegang (ook in Standaard-modus) | ja, `otlab` |
 
 Je krijgt een samenvatting en kunt nog aanpassen voordat er iets wordt aangemaakt.
 
@@ -60,8 +61,33 @@ Zie de kop van [install.sh](install.sh) voor alle variabelen.
 De installer:
 1. maakt de controller-LXC op de gekozen storage, bridge en VLAN;
 2. installeert de controller (FastAPI) als systemd service;
-3. koppelt de controller aan de host met een SSH-sleutel die alleen vanaf het controller-IP geldig is;
+3. koppelt de controller aan de host (zie hieronder);
 4. print de URL en het login-wachtwoord van de web UI.
+
+### Hoe de controller met Proxmox praat
+
+De controller logt via **SSH** in op de host en voert daar `qm`, `pct` en `pvesh` uit; bestanden
+(FortiGate-image, config-ISO) gaan via SFTP. De OT-containers worden met `pct exec` bediend, dus
+zonder netwerkpad naar de OT-segmenten. Nodig: de controller moet de host op TCP 22 bereiken.
+
+Standaard (na bevestiging in de wizard) maakt de installer hiervoor een aparte gebruiker aan:
+
+- systeemgebruiker `otlab` (home `/var/lib/otlab`, geen wachtwoord) met alleen de sleutel van de controller;
+- de sleutel is aan het controller-IP gebonden (bij statisch IP) en staat geen forwarding toe;
+- `/etc/sudoers.d/otlab` staat alleen `qm`, `pct`, `pvesh` en het plaatsen van de config-ISO toe;
+- `/var/lib/vz/otlab` is de werkmap waar de gebruiker images en ISO's neerzet.
+
+Toegang intrekken (lab-VM's en containers blijven staan):
+
+```bash
+otlab-revoke
+```
+
+Let op: `qm` en `pct` zijn in de praktijk root-equivalent (bijv. bind-mounts van host-paden). De
+aparte gebruiker maakt de toegang **zichtbaar, controleerbaar en eenvoudig in te trekken**, maar is
+geen harde sandbox. Kies je in de wizard voor root, dan komt de sleutel in
+`/root/.ssh/authorized_keys` (de symlink naar `/etc/pve/priv/` blijft intact) en ruimt
+`otlab-revoke` die ook weer op.
 
 ## Gebruik
 
@@ -120,9 +146,9 @@ met een echte FortiGate-VM gedraaid**. Controleer bij de eerste uitrol vooral:
 - Het LXC-template haalt eenmalig packages op via `vmbr0` (DHCP). Geen DHCP? Zet `template_net` in
   `lab/topology.yaml`.
 - Linked clones werken op LVM-thin/ZFS; op `dir`-storage valt de controller terug op full clones.
-- De web UI gebruikt HTTP met basic auth; zet hem niet buiten je labnetwerk open.
+- De web UI gebruikt HTTP met een loginformulier (gebruiker `admin`, sessie 12 uur; wachtwoord in `/opt/otlab/data/ui_password`). Het verkeer is niet versleuteld: zet hem niet buiten je labnetwerk open.
 
 ## Afbreken
 
 **Lab → Afbreken…** verwijdert VM's en containers, en optioneel het template en de bridges.
-De controller-LXC verwijder je zelf met `pct destroy <id>`.
+De controller-LXC verwijder je zelf met `pct destroy <id>`; draai daarna `otlab-revoke` om de host-toegang in te trekken.
