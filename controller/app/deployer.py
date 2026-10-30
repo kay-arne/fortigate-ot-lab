@@ -384,6 +384,13 @@ def node_mac(node) -> str:
     return "02:4F:54:" + ":".join(f"{x:02X}" for x in o[1:])
 
 
+def node_hwaddr(node) -> str:
+    """Werkelijk MAC-adres van een container; containers van vóór de vaste
+    MAC's hebben nog een willekeurig adres van Proxmox."""
+    m = re.search(r"hwaddr=([0-9A-Fa-f:]{17})", host().run(["pct", "config", str(node["vmid"])], check=False))
+    return m.group(1) if m else node_mac(node)
+
+
 def write_node_config(node):
     """/etc/otsim.json: rol en argumenten van de simulator uit de topologie."""
     cfg = json.dumps({"name": node["name"], "role": node["role"], "ip": node["ip"],

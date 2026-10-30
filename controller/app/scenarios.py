@@ -140,7 +140,7 @@ def check_assets(log, topo) -> dict:
     nodes = [n for n in inventory(topo) if n["kind"] == "device"]
     missing, wrong = [], []
     for n in nodes:
-        d = by_mac.get(deployer.node_mac(n).lower()) or by_ip.get(n["ip"])
+        d = by_mac.get(deployer.node_hwaddr(n).lower()) or by_ip.get(n["ip"])
         want = fortigate.purdue_level(segs[n["segment"]])
         if not d:
             missing.append(n["name"])
@@ -180,7 +180,13 @@ def check_break_readonly(log, topo) -> dict:
     before = fortigate.policy_app_list(topo, BREAK_POLICY, "OT-monitor")
     log(f"  policy '{BREAK_POLICY}': {before} -> OT-monitor, schrijven wordt niet meer geblokkeerd")
     try:
-        res = run_command("probe-ops", "modbus-write 10.10.0.10 1 999")
+        # De IPS-engine laadt een gewijzigde policy met enkele seconden vertraging.
+        for attempt in range(5):
+            time.sleep(4)
+            res = run_command("probe-ops", "modbus-write 10.10.0.10 1 999")
+            if res.get("ok"):
+                break
+            log(f"  write nog geblokkeerd (poging {attempt + 1}), FortiGate laadt de policy nog")
         if res.get("ok"):
             log(f"  tank-setpoint staat op 999: kijk {BREAK_SECONDS} s in de SCADA HMI hoe de tank overloopt")
             time.sleep(BREAK_SECONDS)
