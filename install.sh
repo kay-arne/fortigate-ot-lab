@@ -45,7 +45,7 @@ EOF
 # --- whiptail helpers ----------------------------------------------------------
 # Alle helpers geven de keuze terug op stdout en breken af bij Cancel/Esc.
 w_input() {   # titel tekst default
-  whiptail --backtitle "$TITLE" --title "$1" --inputbox "$2" 10 70 "$3" 3>&1 1>&2 2>&3 || cancel
+  whiptail --backtitle "$TITLE" --title "$1" --inputbox "$2" 13 74 "$3" 3>&1 1>&2 2>&3 || cancel
 }
 w_menu() {    # titel tekst default tag1 item1 tag2 item2 ...
   local title=$1 text=$2 def=$3; shift 3
@@ -66,6 +66,21 @@ is_ip()   { [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 is_vlan() { [[ -z $1 ]] || { [[ $1 =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 4094 )); }; }
 is_num()  { [[ $1 =~ ^[0-9]+$ ]]; }
 vmid_free() { ! pct status "$1" >/dev/null 2>&1 && ! qm status "$1" >/dev/null 2>&1; }
+used_vmids() {
+  pvesh get /cluster/resources --type vm --output-format json 2>/dev/null \
+    | grep -o '"vmid":[0-9]*' | cut -d: -f2 | sort -n
+}
+# eerste basis >= $1 waarvoor basis..basis+99 vrij is
+find_free_base() {
+  local b=$1 used u clash
+  used="$(used_vmids)"
+  while true; do
+    clash=""
+    for u in $used; do (( u >= b && u <= b + 99 )) && { clash=$u; break; }; done
+    [[ -z $clash ]] && { echo "$b"; return; }
+    b=$(( clash + 1 ))
+  done
+}
 range_free() {  # base: base..base+99 moeten vrij zijn
   local used
   used="$(pvesh get /cluster/resources --type vm --output-format json 2>/dev/null \
@@ -125,7 +140,9 @@ UI_PORT="${UI_PORT:-8080}"
 LAB_STORAGE="${LAB_STORAGE:-}"
 LAB_BRIDGE="${LAB_BRIDGE:-}"
 LAB_VLAN="${LAB_VLAN-__same__}"
-LAB_VMID_BASE="${LAB_VMID_BASE:-9100}"
+# Leeg = automatisch: eerste vrije reeks vanaf het controller-ID + 1.
+LAB_VMID_BASE="${LAB_VMID_BASE:-}"
+LAB_BASE_MANUAL=$([[ -n $LAB_VMID_BASE ]] && echo 1 || echo 0)
 TEMPLATE_NET="${TEMPLATE_NET:-}"
 HOST_ACCESS="${HOST_ACCESS:-user}"
 HOST_USER="${HOST_USER:-otlab}"
@@ -193,7 +210,23 @@ advanced_settings() {
     TEMPLATE_NET="ip=dhcp"
   fi
 
-  LAB_VMID_BASE="$(ask_valid is_num "VMID-reeks" "Eerste VMID van het lab (gebruikt <basis> t/m <basis>+99):" "$LAB_VMID_BASE")"
+  local suggest
+  if (( LAB_BASE_MANUAL )); then suggest=$LAB_VMID_BASE; else suggest="$(find_free_base $(( CTID + 1 )))"; fi
+  while true; do
+    LAB_VMID_BASE="$(ask_valid is_num "VMID-reeks" "Eerste VMID van het lab. Het lab gebruikt <basis> t/m <basis>+99 (FortiGate = basis, template = basis+1, devices vanaf basis+10).
+
+Voorstel: eerste vrije reeks na de controller ($CTID)." "$suggest")"
+    if ! range_free "$LAB_VMID_BASE"; then
+      w_msg "VMID-reeks" "Niet alle ID's $LAB_VMID_BASE-$(( LAB_VMID_BASE + 99 )) zijn vrij."
+    elif (( CTID >= LAB_VMID_BASE && CTID <= LAB_VMID_BASE + 99 )); then
+      w_msg "VMID-reeks" "De reeks overlapt met het controller-ID $CTID."
+    else
+      break
+    fi
+    suggest=$LAB_VMID_BASE
+  done
+  # Volgt de reeks het voorstel, dan schuift hij mee als je het controller-ID later aanpast.
+  LAB_BASE_MANUAL=$([[ $LAB_VMID_BASE == "$(find_free_base $(( CTID + 1 )))" ]] && echo 0 || echo 1)
   HOST_IP="$(ask_valid is_ip "Proxmox host" "IP waarop de controller deze host via SSH bereikt:" "$HOST_IP")"
 }
 
@@ -218,6 +251,7 @@ Nee = sleutel aan root koppelen"; then
 }
 
 finalize_defaults() {
+  (( LAB_BASE_MANUAL )) || LAB_VMID_BASE="$(find_free_base $(( CTID + 1 )))"
   LAB_STORAGE="${LAB_STORAGE:-$CT_STORAGE}"
   LAB_BRIDGE="${LAB_BRIDGE:-$CT_BRIDGE}"
   [[ $LAB_VLAN == __same__ ]] && LAB_VLAN="$CT_VLAN"

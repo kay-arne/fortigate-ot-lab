@@ -43,7 +43,7 @@ geavanceerde modus vraagt de installer (whiptail-menu's met wat er op je host be
 | Storage voor de FortiGate en de OT-containers | zelfde als de controller |
 | Bridge en VLAN van FortiGate port1 (WAN) | zelfde als de controller |
 | Netwerk tijdens de template-build (DHCP of tijdelijk IP) | DHCP |
-| VMID-reeks van het lab (100 ID's) | 9100–9199 |
+| Eerste VMID van het lab (reeks van 100 ID's) | controller-ID + 1, of de eerste vrije reeks daarna |
 | IP waarop de controller de host via SSH bereikt | IP op de interface met de default route |
 | Aparte gebruiker voor de host-toegang (ook in Standaard-modus) | ja, `otlab` |
 
