@@ -234,12 +234,21 @@ de *function code*:
 - de HMI mag wel schrijven, en ook die write staat in de log als audit trail.
 
 Kijk daarna in *Log & Report > Security Events*. Onder Application Control staan
-de doorgelaten en geblokkeerde Industrial-applicaties. Onder Intrusion Prevention
-staan ook detecties als `Modbus.TCP.Unauthorized.Read.Request.PLC`: de IPS-sensor
-staat op monitoren en meldt ook het normale pollen van de HMI. Bespreek met de groep
-waarom je zo'n signature eerst tunet voordat je hem op blokkeren zet.
+de doorgelaten en geblokkeerde Industrial-applicaties.
 
-![Security Events: Industrial-applicaties toegestaan en geblokkeerd, plus de IPS-detecties](img/fgt-security-events.jpg)
+**Verdieping: een signature tunen**
+- FortiGuard heeft ook signatures als `Modbus.TCP.Unauthorized.Read.Request.PLC`
+  en `…Write.Request.PLC` (severity *info*). Die staan standaard uit, omdat ze op
+  élke read of write afgaan, ongeacht van wie die komt. De sensor `OT-IPS` volgt
+  voor info en low de standaardstatus, dus je ziet ze niet.
+- Zet de read-signature in `OT-IPS` aan (*Security Profiles > Intrusion Prevention*,
+  signature toevoegen op naam) en kijk een paar minuten naar Security Events.
+  Het normale pollen van de HMI en de historian levert honderden meldingen op.
+- Bespreek met de groep: op welke conduit is zo'n melding wél waardevol, en waarom
+  tune je een signature eerst in monitor-modus voordat je hem op blokkeren zet?
+- Zet de signature daarna weer uit, of draai de policy-uitrol opnieuw.
+
+![Security Events met de signatures aan: links de Industrial-applicaties, rechts honderden read- en write-meldingen op normaal verkeer](img/fgt-security-events.jpg)
 
 **Les**
 - Poortfiltering is niet genoeg: dezelfde poort draagt zowel "kijken" als "ingrijpen".

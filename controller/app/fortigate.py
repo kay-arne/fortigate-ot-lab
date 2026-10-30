@@ -572,11 +572,13 @@ def provision(log, topo):
         "unknown-application-log": "enable", "entries": ro_entries})
 
     log("IPS-sensor (incl. OT-signatures)")
+    # info/low op 'default': opt-in-signatures als Modbus.TCP.Unauthorized.Read.Request.PLC
+    # gaan anders af op elke read van de HMI en historian over een toegestane conduit.
     api.upsert("cmdb/ips/sensor", "OT-IPS", {
         "name": "OT-IPS", "comment": "IT + OT signatures, block medium+",
         "entries": [{"id": 1, "severity": "medium high critical", "status": "enable",
                      "action": "block", "log": "enable", "log-packet": "enable"},
-                    {"id": 2, "severity": "info low", "status": "enable", "action": "pass", "log": "enable"}]})
+                    {"id": 2, "severity": "info low", "status": "default", "action": "pass", "log": "enable"}]})
 
     log("VIP: remote access naar de DMZ jump host (WAN :2222 -> 22)")
     wan_ip = mgmt_ip(topo)
