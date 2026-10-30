@@ -219,41 +219,102 @@ def push_otsim(log, vmid):
                      "&& systemctl daemon-reload", check=True)
 
 
+def _is_template(h, vmid) -> bool:
+    return bool(re.search(r"^template:\s*1", h.run(["pct", "config", str(vmid)], check=False), re.M))
+
+
 def build_template(log, topo):
     h = host()
     hcfg = load_host()
     vmid = template_vmid(topo)
     if h.exists(vmid):
-        log(f"template {vmid} bestaat al, overslaan")
-        return
+        if _is_template(h, vmid):
+            log(f"template {vmid} bestaat al, overslaan")
+            return
+        log(f"container {vmid} is een onvoltooid template van een eerdere mislukte build; opnieuw bouwen")
+        h.run(["pct", "stop", str(vmid)], check=False)
+        h.run(["pct", "destroy", str(vmid), "--purge", "1"], log=log)
     tnet = topo["lab"]["template_net"]
-    log(f"template-LXC {vmid} bouwen (tijdelijk op {topo['lab']['uplink_bridge']} voor packages)")
+    bridge = f"{topo['lab']['uplink_bridge']}{uplink_tag(topo)}"
+    log(f"template-LXC {vmid} bouwen (tijdelijk op {bridge.replace(',tag=', ' VLAN ')}, {tnet}, voor packages)")
     h.run(["pct", "create", str(vmid), hcfg["template"], "--hostname", vm_name(topo, "template"),
            "--cores", "2", "--memory", "1024", "--rootfs", f"{hcfg['storage']}:4",
            "--unprivileged", "1", "--features", "nesting=1",
-           "--net0", f"name=eth0,bridge={topo['lab']['uplink_bridge']}{uplink_tag(topo)},{tnet}",
+           "--net0", f"name=eth0,bridge={bridge},{tnet}",
            "--tags", "otlab"], log=log)
-    h.run(["pct", "start", str(vmid)])
-    for _ in range(60):
+    try:
+        h.run(["pct", "start", str(vmid)], log=log)
+        wait_for_internet(log, h, vmid)
+        log("apt packages installeren")
+        h.pct_exec(vmid, f"export DEBIAN_FRONTEND=noninteractive; apt-get update -q && apt-get install -yq {APT_PACKAGES}",
+                   timeout=1200, check=True)
+        log("python-omgeving met OT-protocol libraries")
+        h.pct_exec(vmid, f"python3 -m venv /opt/otsim/venv && /opt/otsim/venv/bin/pip install -q {PIP_PACKAGES}",
+                   timeout=1200, check=True)
+        push_otsim(log, vmid)
+        h.pct_exec(vmid, "systemctl disable ssh; apt-get clean; rm -f /etc/ssh/ssh_host_*; truncate -s0 /etc/machine-id")
+        log("netwerk loskoppelen en converteren naar template")
+        h.run(["pct", "stop", str(vmid)])
+        h.run(["pct", "set", str(vmid), "--delete", "net0"])
+        h.run(["pct", "template", str(vmid)])
+    except Exception:
+        log(f"template-build mislukt; container {vmid} opruimen zodat een nieuwe poging schoon begint")
+        h.run(["pct", "stop", str(vmid)], check=False)
+        h.run(["pct", "destroy", str(vmid), "--purge", "1"], check=False)
+        raise
+
+
+def wait_for_internet(log, h, vmid, timeout=180):
+    log("wachten op IP-adres en DNS in het template...")
+    start = time.time()
+    next_note = start + 30
+    while time.time() - start < timeout:
         rc, _ = h.pct_exec(vmid, "getent hosts deb.debian.org")
         if rc == 0:
-            break
-        time.sleep(2)
-    else:
-        raise RuntimeError("template heeft geen internet (DHCP/DNS op de uplink?)")
+            log(f"internet OK na {int(time.time() - start)}s")
+            return
+        if time.time() > next_note:
+            log(f"  nog geen internet na {int(time.time() - start)}s...")
+            next_note += 30
+        time.sleep(3)
+    log("diagnose van het netwerk in het template:")
+    for line in network_diagnosis(h, vmid):
+        log(f"  {line}")
+    raise RuntimeError("template heeft geen internet; zie de diagnose hierboven")
 
-    log("apt packages installeren")
-    h.pct_exec(vmid, f"export DEBIAN_FRONTEND=noninteractive; apt-get update -q && apt-get install -yq {APT_PACKAGES}",
-               timeout=1200, check=True)
-    log("python-omgeving met OT-protocol libraries")
-    h.pct_exec(vmid, f"python3 -m venv /opt/otsim/venv && /opt/otsim/venv/bin/pip install -q {PIP_PACKAGES}",
-               timeout=1200, check=True)
-    push_otsim(log, vmid)
-    h.pct_exec(vmid, "systemctl disable ssh; apt-get clean; rm -f /etc/ssh/ssh_host_*; truncate -s0 /etc/machine-id")
-    log("netwerk loskoppelen en converteren naar template")
-    h.run(["pct", "stop", str(vmid)])
-    h.run(["pct", "set", str(vmid), "--delete", "net0"])
-    h.run(["pct", "template", str(vmid)])
+
+def network_diagnosis(h, vmid) -> list[str]:
+    """Stap voor stap: IP (DHCP) -> default route -> gateway -> internet -> DNS."""
+    def run(cmd):
+        rc, out = h.pct_exec(vmid, cmd, timeout=30)
+        return rc, out.strip()
+
+    out = []
+    _, addr = run("ip -4 -o addr show eth0 | awk '{print $4}'")
+    _, route = run("ip route | awk '/^default/ {print $3; exit}'")
+    _, resolv = run("grep -E '^(nameserver|search)' /etc/resolv.conf")
+    out.append(f"IPv4-adres eth0 : {addr or 'GEEN'}")
+    out.append(f"default gateway : {route or 'GEEN'}")
+    out.append(f"resolv.conf     : {resolv.replace(chr(10), ' | ') or 'leeg'}")
+    if not addr:
+        out.append("=> geen IP-adres: geen DHCP-antwoord op deze bridge/VLAN (DHCP-pool vol, geen DHCP-server "
+                   "in dit VLAN?). Controleer DHCP of kies een tijdelijk statisch IP voor de template-build "
+                   "(template_net in data/host.json).")
+        return out
+    if not route:
+        out.append("=> wel IP maar geen default gateway: DHCP geeft geen router mee, of de gateway ontbreekt in template_net.")
+        return out
+    rc_gw, _ = run(f"ping -c1 -W2 {route} >/dev/null")
+    rc_net, _ = run("ping -c1 -W2 1.1.1.1 >/dev/null")
+    rc_dns, _ = run("getent hosts deb.debian.org")
+    out.append(f"ping gateway    : {'ok' if rc_gw == 0 else 'geen antwoord'}")
+    out.append(f"ping 1.1.1.1    : {'ok' if rc_net == 0 else 'geen antwoord'}")
+    out.append(f"DNS deb.debian.org: {'ok' if rc_dns == 0 else 'mislukt'}")
+    if rc_net == 0 and rc_dns != 0:
+        out.append("=> internet werkt, DNS niet: controleer de nameserver hierboven (overgenomen van de Proxmox host).")
+    elif rc_net != 0:
+        out.append("=> geen internet via de gateway: controleer routing/firewall voor dit IP of deze VLAN.")
+    return out
 
 
 # --------------------------------------------------------------------------
