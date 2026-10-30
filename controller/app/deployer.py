@@ -165,8 +165,16 @@ def create_fortigate_vm(log, topo, storage, remote_img):
     h.run(["qm", "set", str(vmid), "--scsi0", unused.group(1)], log=log)
     log(f"logdisk scsi1 ({fgt.get('log_disk_gb', 32)} GB) toevoegen")
     h.run(["qm", "set", str(vmid), "--scsi1", f"{storage}:{fgt.get('log_disk_gb', 32)}"], log=log)
-    h.run(["qm", "set", str(vmid), "--ide2", f"local:iso/{ISO_NAME},media=cdrom",
-           "--boot", "order=ide2;scsi0;scsi1"], log=log)
+    h.run(["qm", "set", str(vmid), "--ide2", f"local:iso/{ISO_NAME},media=cdrom"], log=log)
+    # Apart van --ide2: in één 'qm set' voegt Proxmox de nieuwe cdrom toe aan de
+    # oude boot order (net0) en gaat onze order verloren.
+    boot = "order=ide2;scsi0;scsi1"
+    h.run(["qm", "set", str(vmid), "--boot", boot], log=log)
+    actual = re.search(r"^boot:\s*(\S+)", h.run(["qm", "config", str(vmid)]), re.M)
+    if not actual or actual.group(1) != boot:
+        raise RuntimeError(f"boot order niet gezet: verwacht '{boot}', staat op "
+                           f"'{actual.group(1) if actual else '(leeg)'}'")
+    log(f"boot order: {boot}")
 
 
 def build_config_iso(topo, state) -> Path:
