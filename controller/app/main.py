@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, deployer, fortigate, jobs, scenarios
+from . import auth, deployer, fortigate, jobs, scenarios, updates
 from .config import (DATA, HOST_FILE, UPLOADS, get_state, inventory, load_host, load_topology,
                      template_vmid, update_state)
 from .hostctl import host
@@ -135,6 +135,7 @@ def host_info():
         "uplink_vlan": topo["lab"].get("uplink_vlan") or "",
         "template_net": topo["lab"]["template_net"],
         "vmid_range": f"{base}-{base + 99}",
+        "name_prefix": topo["lab"]["name_prefix"],
         "fortigate_vmid": topo["fortigate"]["vmid"],
         "template_vmid": template_vmid(topo),
         "ui_password": pw_file.read_text().strip() if pw_file.exists() else "",
@@ -170,6 +171,7 @@ def status():
         # host onbereikbaar: toon de topologie wel, met onbekende status
         topo = load_topology()
         lab = {"fortigate": {"vmid": topo["fortigate"]["vmid"], "status": "unknown",
+                             "name": f"{topo['lab']['name_prefix']}-{topo['fortigate']['name']}",
                              "wan": topo["fortigate"]["wan"], "api": False},
                "segments": [{**s, "present": False} for s in topo["segments"]],
                "nodes": [{**n, "status": "unknown"} for n in inventory(topo)]}
@@ -255,6 +257,34 @@ async def upload_license(request: Request, filename: str):
     name = await _stream_upload(request, filename, (".lic",))
     update_state(license_file=name, license_mode="file")
     return public_state()
+
+
+# --- updates -----------------------------------------------------------------
+@app.get("/api/version")
+def version():
+    return updates.version()
+
+
+@app.post("/api/update/check")
+def update_check():
+    try:
+        return updates.check()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"controleren mislukt: {e}")
+
+
+@app.post("/api/update/run")
+def update_run():
+    try:
+        updates.start()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(409, str(e))
+    return {"started": True}
+
+
+@app.get("/api/update/log")
+def update_log(offset: int = 0):
+    return updates.log_lines(offset)
 
 
 # --- lab-acties ------------------------------------------------------------

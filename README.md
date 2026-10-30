@@ -35,7 +35,8 @@ geavanceerde modus vraagt de installer (whiptail-menu's met wat er op je host be
 
 | Vraag | Default |
 |---|---|
-| Container ID, hostname, cores, RAM, disk | eerstvolgend vrij ID, `otlab-controller`, 2, 2048 MiB, 16 GB |
+| Naamprefix voor alle VM's en containers | `otlab` (→ `otlab-controller`, `otlab-fgt`, `otlab-plc-tank`, …) |
+| Container ID, hostname, cores, RAM, disk | eerstvolgend vrij ID, `<prefix>-controller`, 2, 2048 MiB, 16 GB |
 | Storage voor de controller en voor het LXC-template | eerste actieve storage met `rootdir` / `vztmpl` |
 | Bridge en VLAN-tag van de controller | `vmbr0`, geen VLAN |
 | DHCP of statisch IP (+ gateway, DNS) | DHCP |
@@ -95,7 +96,7 @@ geen harde sandbox. Kies je in de wizard voor root, dan komt de sleutel in
    FortiFlex-token), stel het WAN-IP van port1 en een admin-wachtwoord in.
 2. **Lab → Deploy lab**. De controller:
    - maakt de Purdue-bridges (`vmbr900`–`vmbr999`);
-   - maakt de FortiGate-VM met een cloud-init config drive (interfaces, DNS, logging, licentie);
+   - maakt de FortiGate-VM (`<prefix>-fgt`) volgens de Fortinet Proxmox-handleiding, met een cloud-init config drive (interfaces, DNS, logging, licentie);
    - bouwt één LXC-template met alle OT-simulators (Modbus, S7comm, OPC UA, HMI, historian) en kloont daaruit de devices en probes;
    - koppelt via SSH een REST API-user en rolt de OT-policies uit (adressen, conduits, application control, IPS, VIP).
 3. **Testcenter**: draai de validatietests of eigen ad-hoc tests. Per test zie je PASS/FAIL en de
@@ -134,10 +135,17 @@ Al het andere valt op de implicit deny, die gelogd wordt.
 Deze eerste versie is lokaal gecontroleerd (syntax, topologie, UI), maar **nog niet op een Proxmox host
 met een echte FortiGate-VM gedraaid**. Controleer bij de eerste uitrol vooral:
 
-- **Config drive**: de indeling (`openstack/latest/user_data`, licentie in `openstack/content/0000`,
-  `LICENSE-TOKEN:` voor FortiFlex) volgt de Fortinet KVM cloud-init-documentatie. Als de licentie niet
-  via de config drive wordt opgepakt, activeert de controller een FortiFlex-token alsnog via
-  `execute vm-license`.
+- **FortiGate-VM**: aangemaakt volgens de Fortinet *Proxmox Administration Guide*
+  ([deploying a FortiGate-VM](https://docs.fortinet.com/document/fortigate-private-cloud/8.0.0/proxmox-administration-guide/37920/deploying-a-fortigate-vm-into-proxmox),
+  [cloud-init + FortiFlex](https://docs.fortinet.com/document/fortigate-private-cloud/8.0.0/proxmox-administration-guide/832344/deploying-a-fortigate-vm-into-proxmox-using-cloud-init-and-a-fortiflex-token)):
+  OS Linux 6.x/2.6, `fortios.qcow2` via `qm disk import` gekoppeld als **scsi0**, logdisk **scsi1** (32 GB),
+  NIC's zonder Proxmox-firewall, config drive als **ide2** en boot order `ide2 → scsi0 → scsi1`.
+- **Config drive**: één MIME-multipart `openstack/latest/user_data` met `config.txt` (bootstrap) en
+  `license.txt` (`LICENSE-TOKEN:<token>` voor FortiFlex), zoals in de handleiding. Een `.lic`-bestand gaat op
+  dezelfde manier als bijlage mee; dat staat niet letterlijk in de handleiding, dus controleer bij problemen
+  `diagnose debug cloudinit show` op de FortiGate. Lukt FortiFlex via cloud-init niet, dan activeert de
+  controller het token alsnog met `execute vm-license`.
+- **Zonder licentie** werken maar 3 interfaces (port1-3); het lab gebruikt er 7, dus een licentie is nodig.
 - **OT-signatures**: application control-ID's worden opgezocht in de FortiGuard-database van de
   FortiGate (`/api/v2/cmdb/application/name`). Zonder actieve OT-licentie en een FortiGuard-update vindt
   de controller er geen; zet dan na de update *FortiGate policies opnieuw toepassen* aan.
@@ -147,6 +155,25 @@ met een echte FortiGate-VM gedraaid**. Controleer bij de eerste uitrol vooral:
   `lab/topology.yaml`.
 - Linked clones werken op LVM-thin/ZFS; op `dir`-storage valt de controller terug op full clones.
 - De web UI gebruikt HTTP met een loginformulier (gebruiker `admin`, sessie 12 uur; wachtwoord in `/opt/otlab/data/ui_password`). Het verkeer is niet versleuteld: zet hem niet buiten je labnetwerk open.
+
+## Bijwerken
+
+De controller is een git-checkout in `/opt/otlab`; instellingen, uploads, de API-key en testresultaten
+staan in `data/` (niet in git) en blijven bij een update behouden. Het draaiende lab wordt niet aangeraakt.
+
+- **Web UI → Updates**: *Controleren op updates* toont de nieuwe commits, *Nu bijwerken* haalt ze op, werkt
+  de Python-dependencies bij en herstart de controller. De pagina laadt daarna vanzelf opnieuw. Er verschijnt
+  een blauwe stip bij *Updates* als er een nieuwe versie is.
+- **Vanaf de Proxmox host**: draai de installer-oneliner opnieuw. Die herkent een bestaande controller en
+  biedt *Bijwerken* aan (onbeheerd: `OTLAB_UPDATE=1`). Gebruik dit ook voor controllers van vóór deze
+  update-functie: die hebben nog geen `update.sh`.
+- **In de controller**: `/opt/otlab/update.sh`.
+
+Wijzigt een update de OT-simulators, dan toont de *Lab*-tab een melding met de knop
+*Simulators bijwerken*; die zet de nieuwe code in alle draaiende containers.
+
+Heb je bestanden in `/opt/otlab` zelf aangepast (bijv. `lab/topology.yaml`), dan weigert de update en
+toont welke bestanden het zijn, zodat er niets ongemerkt overschreven wordt.
 
 ## Afbreken
 

@@ -8,7 +8,8 @@
 lab:
   name: fortigate-ot-lab
   vmid_base: 9100            # FortiGate = base, template = base+1, devices daarna
-  # uplink_bridge / VLAN / template_net / vmid_base worden door de installer
+  name_prefix: otlab         # Proxmox-namen worden <prefix>-<naam>, bijv. otlab-plc-tank
+  # uplink_bridge / VLAN / template_net / vmid_base / name_prefix worden door de installer
   # gekozen en via data/host.json overschreven; dit zijn alleen defaults.
   uplink_bridge: vmbr0       # fysieke bridge (WAN/port1 van de FortiGate)
   # Het LXC-template hangt tijdens de build kort aan de uplink om packages te
@@ -17,9 +18,10 @@ lab:
 
 fortigate:
   vmid: 9100
-  name: fgt-ot
+  name: fgt                  # VM-naam en FortiGate-hostname: <prefix>-fgt
   cores: 2
   memory: 4096
+  log_disk_gb: 32            # scsi1, door FortiOS geformatteerd bij de eerste boot
   # port1 = uplink; overige poorten volgen de volgorde van 'segments'
   wan:
     mode: static             # static | dhcp  (instelbaar in de web UI)

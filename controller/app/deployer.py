@@ -2,17 +2,20 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 import tarfile
 import tempfile
 import time
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 
-from . import fortigate
+from . import fortigate, updates
 from .config import (ROOT, UPLOADS, get_state, inventory, load_host, load_topology,
                      prefixlen, segment_map, template_vmid, update_state,
-                     uplink_tag)
+                     uplink_tag, vm_name)
 from .hostctl import HostError, host
 
 ISO_NAME = "otlab-fgt-config.iso"
@@ -36,6 +39,7 @@ def lab_status() -> dict:
     links = set(h.run("ls /sys/class/net").split())
     return {
         "fortigate": {"vmid": topo["fortigate"]["vmid"], "status": st(topo["fortigate"]["vmid"]),
+                      "name": vm_name(topo, topo["fortigate"]["name"]),
                       "wan": topo["fortigate"]["wan"], "api": bool(get_state().get("fgt_api_key"))},
         "template": {"vmid": template_vmid(topo), "status": st(template_vmid(topo))},
         "segments": [{**s, "present": s["bridge"] in links} for s in topo["segments"]],
@@ -98,6 +102,7 @@ def deploy_fortigate(log, topo):
         log(f"FortiGate VM {vmid} bestaat al, overslaan")
         return
 
+    h.run(["mkdir", "-p", h.workdir])  # oudere installaties hebben de werkmap nog niet
     remote_img = f"{h.workdir}/{image}"
     if h.run(f"test -f {shlex.quote(remote_img)} && echo yes", check=False).strip() != "yes":
         log(f"image {image} naar de host kopiëren...")
@@ -115,47 +120,83 @@ def deploy_fortigate(log, topo):
     h.put(iso_local, f"{h.workdir}/{ISO_NAME}")
     h.run(["install", "-m", "0644", f"{h.workdir}/{ISO_NAME}", f"/var/lib/vz/template/iso/{ISO_NAME}"])
 
-    storage = hcfg["storage"]
-    args = ["qm", "create", str(vmid), "--name", fgt["name"],
-            "--memory", str(fgt["memory"]), "--cores", str(fgt["cores"]), "--cpu", "host",
-            "--ostype", "l26", "--serial0", "socket", "--vga", "serial0",
-            "--tags", "otlab", "--onboot", "1",
-            "--net0", f"virtio,bridge={topo['lab']['uplink_bridge']}{uplink_tag(topo)}"]
-    for i, seg in enumerate(topo["segments"], start=1):
-        args += [f"--net{i}", f"virtio,bridge={seg['bridge']}"]
-    log(f"VM {vmid} aanmaken ({len(topo['segments']) + 1} NIC's)")
-    h.run(args, log=log)
-    h.run(["qm", "set", str(vmid), "--virtio0", f"{storage}:0,import-from={remote_img}"], log=log)
-    h.run(["qm", "set", str(vmid), "--virtio1", f"{storage}:4"], log=log)  # log disk
-    h.run(["qm", "set", str(vmid), "--ide2", f"local:iso/{ISO_NAME},media=cdrom",
-           "--boot", "order=virtio0"], log=log)
+    try:
+        create_fortigate_vm(log, topo, hcfg["storage"], remote_img)
+    except Exception:
+        log(f"aanmaken mislukt; half-aangemaakte VM {vmid} opruimen")
+        h.run(["qm", "destroy", str(vmid), "--purge", "1"], check=False)
+        raise
     h.run(["qm", "start", str(vmid)], log=log)
-    log("FortiGate start; eerste boot duurt enkele minuten")
+    log("FortiGate start: eerste boot formatteert de logdisk en herstart (met FortiFlex nog een keer)")
+
+
+def create_fortigate_vm(log, topo, storage, remote_img):
+    """VM volgens de Fortinet Proxmox Administration Guide:
+    - OS Linux 6.x/2.6, geen standaarddisk, NIC's zonder Proxmox-firewall;
+    - fortios.qcow2 met 'qm disk import' als unused disk en daarna als scsi0 koppelen;
+    - extra logdisk als scsi1 (FortiOS formatteert hem bij de eerste boot);
+    - config drive (cloud-init ISO) als ide2, boot order ide2 -> scsi0 -> scsi1."""
+    h = host()
+    fgt = topo["fortigate"]
+    vmid = fgt["vmid"]
+    nics = [topo["lab"]["uplink_bridge"] + uplink_tag(topo)] + [seg["bridge"] for seg in topo["segments"]]
+    args = ["qm", "create", str(vmid), "--name", vm_name(topo, fgt["name"]),
+            "--ostype", "l26", "--cpu", "host", "--cores", str(fgt["cores"]), "--memory", str(fgt["memory"]),
+            "--scsihw", "virtio-scsi-single", "--serial0", "socket",
+            "--tags", "otlab", "--onboot", "1",
+            "--description", "FortiGate-VM (FortiGate OT Lab). port1 = uplink, port2.. = OT-segmenten"]
+    for i, bridge in enumerate(nics):
+        args += [f"--net{i}", f"virtio,bridge={bridge},firewall=0"]
+    log(f"VM {vmid} aanmaken ({len(nics)} NIC's: port1 uplink, port2-port{len(nics)} OT-segmenten)")
+    h.run(args, log=log)
+
+    log("fortios.qcow2 importeren (qm disk import)")
+    try:
+        h.run(["qm", "disk", "import", str(vmid), remote_img, storage], log=log)
+    except HostError:
+        h.run(["qm", "importdisk", str(vmid), remote_img, storage], log=log)  # oudere PVE-versies
+    cfg = h.run(["qm", "config", str(vmid)])
+    unused = re.search(r"^unused0:\s*(\S+)", cfg, re.M)
+    if not unused:
+        raise RuntimeError(f"geïmporteerde disk niet gevonden in de VM-config:\n{cfg}")
+    log(f"boot disk koppelen als scsi0 ({unused.group(1)})")
+    h.run(["qm", "set", str(vmid), "--scsi0", unused.group(1)], log=log)
+    log(f"logdisk scsi1 ({fgt.get('log_disk_gb', 32)} GB) toevoegen")
+    h.run(["qm", "set", str(vmid), "--scsi1", f"{storage}:{fgt.get('log_disk_gb', 32)}"], log=log)
+    h.run(["qm", "set", str(vmid), "--ide2", f"local:iso/{ISO_NAME},media=cdrom",
+           "--boot", "order=ide2;scsi0;scsi1"], log=log)
 
 
 def build_config_iso(topo, state) -> Path:
+    """Config drive zoals in de Fortinet-handleiding (cloud-init met FortiFlex):
+    één MIME-multipart user_data in openstack/latest met de configuratie en
+    (indien gekozen) de licentie als bijlage; openstack/content blijft leeg."""
     out = Path(tempfile.mkdtemp(prefix="fgtiso-"))
-    work = out / "drive"
-    latest = work / "openstack" / "latest"
-    content = work / "openstack" / "content"
-    latest.mkdir(parents=True)
-    content.mkdir(parents=True)
+    work = out / "config-drive"
+    (work / "openstack" / "latest").mkdir(parents=True)
+    (work / "openstack" / "content").mkdir(parents=True)
 
-    meta = {"uuid": "otlab-fgt", "files": []}
+    parts = [("config.txt", fortigate.bootstrap_config(topo, state))]
     lic_mode = state.get("license_mode")
     if lic_mode == "file" and state.get("license_file"):
-        (content / "0000").write_bytes((UPLOADS / state["license_file"]).read_bytes())
-        meta["files"].append({"path": "/license", "content_path": "/content/0000"})
+        parts.append(("license.txt", (UPLOADS / state["license_file"]).read_text().strip() + "\n"))
     elif lic_mode == "fortiflex" and state.get("fortiflex_token"):
-        (content / "0000").write_text(f"LICENSE-TOKEN:{state['fortiflex_token']}\n")
-        meta["files"].append({"path": "/license", "content_path": "/content/0000"})
-
-    (latest / "user_data").write_text(fortigate.bootstrap_config(topo, state))
-    (latest / "meta_data.json").write_text(json.dumps(meta))
+        parts.append(("license.txt", f"LICENSE-TOKEN:{state['fortiflex_token']}\n"))
+    (work / "openstack" / "latest" / "user_data").write_text(mime_multipart(parts))
 
     iso = out / ISO_NAME
-    subprocess.run(["genisoimage", "-quiet", "-V", "config-2", "-R", "-J", "-o", str(iso), str(work)], check=True)
+    subprocess.run(["genisoimage", "-quiet", "-R", "-r", "-o", str(iso), str(work)], check=True)
     return iso
+
+
+def mime_multipart(parts: list[tuple[str, str]]) -> str:
+    """Zelfde formaat als 'write-mime-multipart -o user_data config.txt license.txt'."""
+    msg = MIMEMultipart()
+    for filename, text in parts:
+        sub = MIMEText(text, "plain", "us-ascii")
+        sub.add_header("Content-Disposition", "attachment", filename=filename)
+        msg.attach(sub)
+    return msg.as_string()
 
 
 # --------------------------------------------------------------------------
@@ -187,7 +228,7 @@ def build_template(log, topo):
         return
     tnet = topo["lab"]["template_net"]
     log(f"template-LXC {vmid} bouwen (tijdelijk op {topo['lab']['uplink_bridge']} voor packages)")
-    h.run(["pct", "create", str(vmid), hcfg["template"], "--hostname", "otlab-template",
+    h.run(["pct", "create", str(vmid), hcfg["template"], "--hostname", vm_name(topo, "template"),
            "--cores", "2", "--memory", "1024", "--rootfs", f"{hcfg['storage']}:4",
            "--unprivileged", "1", "--features", "nesting=1",
            "--net0", f"name=eth0,bridge={topo['lab']['uplink_bridge']}{uplink_tag(topo)},{tnet}",
@@ -225,15 +266,15 @@ def deploy_node(log, topo, node):
     vmid = node["vmid"]
     res = topo["resources"]["probe" if node["kind"] == "probe" else "device"]
     if h.exists(vmid):
-        log(f"{node['name']} ({vmid}) bestaat al")
+        log(f"{node['hostname']} ({vmid}) bestaat al")
         return
     tpl = template_vmid(topo)
-    log(f"{node['name']} ({vmid}) → {seg['name']} {node['ip']}")
+    log(f"{node['hostname']} ({vmid}) → {seg['name']} {node['ip']}")
     try:
-        h.run(["pct", "clone", str(tpl), str(vmid), "--hostname", node["name"]])
+        h.run(["pct", "clone", str(tpl), str(vmid), "--hostname", node["hostname"]])
     except HostError:
         log("  linked clone niet mogelijk op deze storage, full clone")
-        h.run(["pct", "clone", str(tpl), str(vmid), "--hostname", node["name"], "--full", "1"])
+        h.run(["pct", "clone", str(tpl), str(vmid), "--hostname", node["hostname"], "--full", "1"])
     h.run(["pct", "set", str(vmid),
            "--net0", f"name=eth0,bridge={seg['bridge']},ip={node['ip']}/{prefixlen(seg['subnet'])},gw={seg['gateway']}",
            "--cores", str(res["cores"]), "--memory", str(res["memory"]),
@@ -257,10 +298,11 @@ def update_simulators(log):
     topo = load_topology()
     for node in inventory(topo):
         if host().status(node["vmid"]) == "running":
-            log(f"otsim bijwerken op {node['name']}")
+            log(f"otsim bijwerken op {node['hostname']}")
             push_otsim(log, node["vmid"])
             if node["kind"] == "device":
                 host().pct_exec(node["vmid"], "systemctl restart otsim")
+    update_state(otsim_tree=updates.otsim_tree())
 
 
 # --------------------------------------------------------------------------
@@ -279,7 +321,7 @@ def deploy_all(log):
         deploy_node(log, topo, node)
     log("== 5/5 FortiGate OT-policies ==")
     fortigate.provision(log, topo)
-    update_state(deployed=True)
+    update_state(deployed=True, otsim_tree=updates.otsim_tree())
 
 
 def destroy_all(log, remove_template=False, remove_net=False):

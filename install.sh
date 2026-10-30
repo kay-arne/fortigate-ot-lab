@@ -8,8 +8,12 @@
 # storage, bridge, VLAN, DHCP/statisch IP, resources en de uplink van de
 # FortiGate. Kies "Standaard" voor de defaults zonder verdere vragen.
 #
+# Draait er al een controller, dan biedt de installer aan om die bij te
+# werken (onbeheerd: OTLAB_UPDATE=1, eventueel UPDATE_CTID=<id>).
+#
 # Onbeheerd installeren: zet OTLAB_UNATTENDED=1 en eventueel de variabelen
 # hieronder als env vóór de oneliner.
+#   NAME_PREFIX (default otlab: namen worden <prefix>-controller, <prefix>-fgt, ...)
 #   CTID CT_HOSTNAME CT_CORES CT_MEMORY CT_DISK CT_STORAGE TPL_STORAGE
 #   CT_BRIDGE CT_VLAN CT_IP CT_GW CT_DNS UI_PORT
 #   LAB_STORAGE LAB_BRIDGE LAB_VLAN LAB_VMID_BASE TEMPLATE_NET HOST_IP
@@ -65,6 +69,8 @@ is_cidr() { [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]]; 
 is_ip()   { [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 is_vlan() { [[ -z $1 ]] || { [[ $1 =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 4094 )); }; }
 is_num()  { [[ $1 =~ ^[0-9]+$ ]]; }
+is_prefix()   { [[ $1 =~ ^[a-z0-9]([a-z0-9-]{0,14}[a-z0-9])?$ ]]; }
+is_hostname() { [[ $1 =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$ ]]; }
 vmid_free() { ! pct status "$1" >/dev/null 2>&1 && ! qm status "$1" >/dev/null 2>&1; }
 used_vmids() {
   pvesh get /cluster/resources --type vm --output-format json 2>/dev/null \
@@ -123,9 +129,61 @@ NODE="$(hostname)"
 DEF_ROUTE_DEV="$(ip route show default | awk '{print $5; exit}')"
 DEF_GW="$(ip route show default | awk '{print $3; exit}')"
 
+is_interactive() { [[ ${OTLAB_UNATTENDED:-0} != 1 && -t 0 ]]; }
+
+# --- bestaande controller bijwerken ---------------------------------------------------
+existing_controllers() {
+  grep -l 'FortiGate OT Lab controller' /etc/pve/lxc/*.conf 2>/dev/null \
+    | xargs -r -n1 basename | sed 's/\.conf$//' | sort -n
+}
+
+update_controller() {
+  local id=$1
+  pct config "$id" >/dev/null 2>&1 || die "CT $id bestaat niet."
+  if ! pct status "$id" | grep -q running; then
+    c_info "CT $id starten..."
+    pct start "$id"
+    sleep 5
+  fi
+  c_info "Controller in CT $id bijwerken..."
+  # Oudere versies hebben nog geen update.sh: dan eerst de code ophalen.
+  pct exec "$id" -- bash -c 'cd /opt/otlab && { [ -f update.sh ] || git pull --ff-only; } && bash update.sh --always' \
+    || die "Bijwerken mislukt; zie de uitvoer hierboven."
+  local addr port
+  addr="$(pct exec "$id" -- sh -c "ip -4 -o addr show eth0 | awk '{print \$4}' | cut -d/ -f1" 2>/dev/null || true)"
+  port="$(pct exec "$id" -- sh -c "grep -o -- '--port [0-9]*' /etc/systemd/system/otlab.service | cut -d' ' -f2" 2>/dev/null || true)"
+  c_ok "Controller bijgewerkt."
+  echo
+  echo "  Web UI:  http://${addr:-<ip>}:${port:-8080}"
+  echo "  Zijn de OT-simulators gewijzigd? Klik dan in de web UI onder 'Lab' op 'Simulators bijwerken'."
+  echo
+  exit 0
+}
+
+mapfile -t EXISTING < <(existing_controllers)
+if [[ ${OTLAB_UPDATE:-0} == 1 ]]; then
+  (( ${#EXISTING[@]} )) || [[ -n ${UPDATE_CTID:-} ]] || die "Geen bestaande controller gevonden."
+  update_controller "${UPDATE_CTID:-${EXISTING[0]}}"
+elif (( ${#EXISTING[@]} )) && is_interactive; then
+  command -v whiptail >/dev/null || die "whiptail ontbreekt (apt install whiptail)."
+  header
+  items=()
+  for id in "${EXISTING[@]}"; do
+    items+=("$id" "Bijwerken: $(pct config "$id" | awk '/^hostname:/ {print $2}') ($(pct status "$id" | awk '{print $2}'))")
+  done
+  items+=(new "Nieuwe controller installeren")
+  choice="$(w_menu "Bestaande controller gevonden" \
+    "Er draait al een OT Lab controller op deze host. Bijwerken haalt de nieuwste versie op; instellingen, uploads en het lab blijven behouden." \
+    "${EXISTING[0]}" "${items[@]}")"
+  [[ $choice == new ]] || update_controller "$choice"
+fi
+
 # --- defaults --------------------------------------------------------------------
 CTID="${CTID:-$(pvesh get /cluster/nextid)}"
-CT_HOSTNAME="${CT_HOSTNAME:-otlab-controller}"
+NAME_PREFIX="${NAME_PREFIX:-otlab}"
+# Leeg = automatisch <prefix>-controller (schuift mee als de prefix verandert).
+CT_HOSTNAME="${CT_HOSTNAME:-}"
+CT_HOSTNAME_MANUAL=$([[ -n $CT_HOSTNAME ]] && echo 1 || echo 0)
 CT_CORES="${CT_CORES:-2}"
 CT_MEMORY="${CT_MEMORY:-2048}"
 CT_DISK="${CT_DISK:-16}"
@@ -158,7 +216,12 @@ advanced_settings() {
     w_msg "Container ID" "ID $CTID is al in gebruik."
     CTID="$(ask_valid is_num "Container ID" "VMID van de controller-container:" "$(pvesh get /cluster/nextid)")"
   done
-  CT_HOSTNAME="$(w_input "Hostname" "Hostname van de controller:" "$CT_HOSTNAME")"
+  NAME_PREFIX="$(ask_valid is_prefix "Naamprefix" "Prefix voor alle VM's en containers van het lab (kleine letters, cijfers, '-').
+
+Voorbeeld: '$NAME_PREFIX' geeft $NAME_PREFIX-controller, $NAME_PREFIX-fgt, $NAME_PREFIX-plc-tank, ..." "$NAME_PREFIX")"
+  (( CT_HOSTNAME_MANUAL )) || CT_HOSTNAME="$NAME_PREFIX-controller"
+  CT_HOSTNAME="$(ask_valid is_hostname "Hostname" "Hostname van de controller:" "$CT_HOSTNAME")"
+  CT_HOSTNAME_MANUAL=$([[ $CT_HOSTNAME == "$NAME_PREFIX-controller" ]] && echo 0 || echo 1)
   CT_CORES="$(ask_valid is_num "CPU" "Aantal cores:" "$CT_CORES")"
   CT_MEMORY="$(ask_valid is_num "Geheugen" "RAM in MiB:" "$CT_MEMORY")"
   CT_DISK="$(ask_valid is_num "Disk" "Disk in GB:" "$CT_DISK")"
@@ -251,6 +314,7 @@ Nee = sleutel aan root koppelen"; then
 }
 
 finalize_defaults() {
+  (( CT_HOSTNAME_MANUAL )) || CT_HOSTNAME="$NAME_PREFIX-controller"
   (( LAB_BASE_MANUAL )) || LAB_VMID_BASE="$(find_free_base $(( CTID + 1 )))"
   LAB_STORAGE="${LAB_STORAGE:-$CT_STORAGE}"
   LAB_BRIDGE="${LAB_BRIDGE:-$CT_BRIDGE}"
@@ -271,12 +335,13 @@ Lab
   FortiGate WAN : $LAB_BRIDGE${LAB_VLAN:+ VLAN $LAB_VLAN}
   Template-net  : $TEMPLATE_NET
   VMID's        : $LAB_VMID_BASE - $(( LAB_VMID_BASE + 99 ))
+  Naamprefix    : $NAME_PREFIX  ($NAME_PREFIX-fgt, $NAME_PREFIX-plc-tank, ...)
   Proxmox host  : $NODE ($HOST_IP)
   Host-toegang  : $([[ $HOST_ACCESS == user ]] && echo "gebruiker $HOST_USER (sudo: qm, pct, pvesh)" || echo "root")$([[ $CT_IP == dhcp ]] && echo ", sleutel niet aan IP gebonden (DHCP)")
 EOF
 }
 
-if [[ ${OTLAB_UNATTENDED:-0} == 1 || ! -t 0 ]]; then
+if ! is_interactive; then
   finalize_defaults
   c_info "Onbeheerde installatie met:"; summary
 else
@@ -305,6 +370,8 @@ done
 [[ -n $CT_STORAGE && -n $TPL_STORAGE && -n $LAB_STORAGE ]] || die "Kon geen geschikte storage bepalen."
 is_vlan "$CT_VLAN" && is_vlan "$LAB_VLAN" || die "Ongeldige VLAN-tag."
 [[ -n $HOST_IP ]] || die "Kon het IP van de host niet bepalen (zet HOST_IP=...)."
+is_prefix "$NAME_PREFIX" || die "Ongeldige NAME_PREFIX '$NAME_PREFIX' (kleine letters, cijfers en '-', max 16)."
+is_hostname "$CT_HOSTNAME" || die "Ongeldige hostname '$CT_HOSTNAME'."
 [[ $HOST_ACCESS == user || $HOST_ACCESS == root ]] || die "HOST_ACCESS moet 'user' of 'root' zijn."
 [[ $HOST_ACCESS == root || ( $HOST_USER =~ ^[a-z_][a-z0-9_-]{0,30}$ && $HOST_USER != root ) ]] || die "Ongeldige HOST_USER."
 
@@ -462,7 +529,8 @@ pct exec "$CTID" -- bash -c "cat > /opt/otlab/data/host.json" <<EOF
   "uplink_bridge": "$LAB_BRIDGE",
   "uplink_vlan": "$LAB_VLAN",
   "template_net": "$TEMPLATE_NET",
-  "vmid_base": $LAB_VMID_BASE
+  "vmid_base": $LAB_VMID_BASE,
+  "name_prefix": "$NAME_PREFIX"
 }
 EOF
 

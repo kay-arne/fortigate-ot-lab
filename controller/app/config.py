@@ -32,12 +32,18 @@ def load_topology() -> dict:
     lab["uplink_bridge"] = hcfg.get("uplink_bridge") or lab["uplink_bridge"]
     lab["uplink_vlan"] = str(hcfg.get("uplink_vlan") or lab.get("uplink_vlan") or "")
     lab["template_net"] = hcfg.get("template_net") or lab.get("template_net", "ip=dhcp")
+    lab["name_prefix"] = hcfg.get("name_prefix") or lab.get("name_prefix") or "otlab"
     if hcfg.get("vmid_base"):
         lab["vmid_base"] = int(hcfg["vmid_base"])
         topo["fortigate"]["vmid"] = lab["vmid_base"]
     # WAN-instellingen uit de UI overschrijven de defaults uit de YAML.
     topo["fortigate"]["wan"].update(get_state().get("wan", {}))
     return topo
+
+
+def vm_name(topo: dict, name: str) -> str:
+    """Naam van een VM/container in Proxmox: <prefix>-<naam>, bijv. otlab-plc-tank."""
+    return f"{topo['lab']['name_prefix']}-{name}"
 
 
 def uplink_tag(topo: dict) -> str:
@@ -92,7 +98,8 @@ def inventory(topo: dict) -> list[dict]:
     items = []
     vmid = base + 10
     for d in topo["devices"]:
-        items.append({**d, "kind": "device", "vmid": vmid, "args": d.get("args", {})})
+        items.append({**d, "kind": "device", "vmid": vmid, "args": d.get("args", {}),
+                      "hostname": vm_name(topo, d["name"])})
         vmid += 1
     vmid = base + 80
     for sid in topo["probes"]["segments"]:
@@ -105,6 +112,7 @@ def inventory(topo: dict) -> list[dict]:
             "kind": "probe",
             "vmid": vmid,
             "args": {},
+            "hostname": vm_name(topo, f"probe-{sid}"),
         })
         vmid += 1
     return items

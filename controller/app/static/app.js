@@ -12,12 +12,15 @@ async function api(path, opts = {}) {
 const post = (path, data) => api(path, { method: "POST", body: JSON.stringify(data || {}) });
 
 // --- tabs ------------------------------------------------------------------
-$$("nav button").forEach((b) => b.addEventListener("click", () => {
-  $$("nav button").forEach((x) => x.classList.toggle("active", x === b));
-  $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + b.dataset.tab));
-  if (b.dataset.tab === "tests") loadScenarios();
-  if (b.dataset.tab === "setup") loadSettings();
-}));
+function goTo(tab) {
+  $$("nav button").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
+  $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + tab));
+  if (tab === "tests") loadScenarios();
+  if (tab === "setup") loadSettings();
+  if (tab === "updates") loadVersion();
+}
+$$("nav button").forEach((b) => b.addEventListener("click", () => goTo(b.dataset.tab)));
+$$("[data-goto]").forEach((b) => b.addEventListener("click", () => goTo(b.dataset.goto)));
 
 // --- job log ---------------------------------------------------------------
 let logTimer = null;
@@ -56,13 +59,13 @@ function renderLab(lab) {
   let html = `<div class="purdue">
     <div class="zone" style="border-left-color:#666"><div class="meta"><b>L4/L5 Enterprise</b><div class="lvl">fysiek netwerk (vmbr0)</div></div>
       <div class="nodes"><div class="node"><div class="n">Jouw IT-netwerk</div><div class="ip">enige toegang loopt via de FortiGate</div></div></div></div>
-    <div class="fgt"><span class="dot ${f.status}"></span><b>FortiGate ${f.vmid}</b>
+    <div class="fgt"><span class="dot ${f.status}"></span><b>${esc(f.name || "FortiGate")} · ${f.vmid}</b>
       <span>port1 ${esc(f.wan.ip || f.wan.mode)}</span><span class="muted">status: ${f.status} · REST API: ${f.api ? "gekoppeld" : "nee"}</span></div>`;
   lab.segments.forEach((s) => {
     html += `<div class="zone"><div class="meta"><b>${esc(s.name)}</b>
       <div class="lvl">${esc(s.port)} · ${esc(s.bridge)} ${s.present ? "" : "(ontbreekt)"} · ${esc(s.subnet)}</div></div><div class="nodes">`;
     (bySeg[s.id] || []).forEach((n) => {
-      html += `<div class="node ${n.kind}"><div class="n"><span class="dot ${n.status}"></span>${esc(n.name)}</div>
+      html += `<div class="node ${n.kind}"><div class="n"><span class="dot ${n.status}"></span>${esc(n.hostname || n.name)}</div>
         <div class="ip">${esc(n.ip)} · ${esc(n.role)} · ${n.vmid}</div></div>`;
     });
     html += `</div></div>`;
@@ -203,6 +206,7 @@ async function loadHost() {
     ["LXC-template", `<span class="mono">${esc(h.template)}</span>`, "Debian-basis voor het OT-template."],
     ["FortiGate uplink", `<span class="mono">${esc(h.uplink_bridge)}</span>${h.uplink_vlan ? ` VLAN <span class="mono">${esc(h.uplink_vlan)}</span>` : " (geen VLAN)"}`, "Bridge van port1 naar je fysieke netwerk."],
     ["Template-build", `<span class="mono">${esc(h.template_net)}</span>`, "Tijdelijk netwerk om packages te downloaden."],
+    ["Naamprefix", `<span class="mono">${esc(h.name_prefix)}-</span>`, `VM's en containers heten <code>${esc(h.name_prefix)}-&lt;naam&gt;</code>, bijv. <code>${esc(h.name_prefix)}-fgt</code>.`],
     ["VMID's", `lab <span class="mono">${esc(h.vmid_range)}</span> · FortiGate ${h.fortigate_vmid} · template ${h.template_vmid} · controller ${esc(h.controller_ctid)}`, ""],
     ["Web UI-login", `<span class="mono">admin</span> / ${secretRow("o-uipw", h.ui_password)}`, "Ook te vinden in de controller: <code>/opt/otlab/data/ui_password</code>."],
   ];
@@ -254,10 +258,100 @@ async function loadScenarios() {
   });
   $("#scenarios").innerHTML = html + "</table>";
   $$("[data-run]").forEach((b) => (b.onclick = () => action(`/api/scenarios/${b.dataset.run}/run`, {}, loadScenarios)));
-  $("#adhoc-node").innerHTML = topo.nodes.map((n) => `<option>${esc(n.name)}</option>`).join("");
+  $("#adhoc-node").innerHTML = topo.nodes.map((n) => `<option value="${esc(n.name)}">${esc(n.hostname || n.name)}</option>`).join("");
 }
 $("#btn-runall").onclick = () => action("/api/scenarios/run-all", {}, loadScenarios);
 $("#btn-adhoc").onclick = () => action("/api/adhoc", { node: $("#adhoc-node").value, command: $("#adhoc-cmd").value });
+
+// --- updates -----------------------------------------------------------------
+const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString("nl-NL", { dateStyle: "medium", timeStyle: "short" }) : "");
+let currentCommit = null;
+
+async function loadVersion() {
+  const v = await api("/api/version");
+  if (!v.git) {
+    $("#version-pill").textContent = "geen git";
+    $("#upd-current").textContent = "Geen git-checkout gevonden; bijwerken via de UI is niet mogelijk.";
+    return v;
+  }
+  currentCommit = v.commit;
+  $("#version-pill").textContent = v.commit;
+  $("#upd-current").innerHTML = `<span class="mono">${esc(v.commit)}</span> ${esc(v.subject)} <span class="hint">(${esc(fmtDate(v.date))})</span>`;
+  $("#upd-branch").textContent = v.branch;
+  $("#otsim-banner").hidden = !v.otsim_outdated;
+  if (v.updating && $("#upd-log").hidden) followUpdate();
+  return v;
+}
+
+function markUpdateAvailable(n) {
+  $("#update-dot").hidden = !n;
+  $("#version-pill").classList.toggle("new", !!n);
+  $("#version-pill").title = n ? `${n} update(s) beschikbaar` : "Versie van de controller";
+  const b = $("#upd-badge");
+  b.className = "badge " + (n ? "todo" : "ok");
+  b.textContent = n ? `${n} update(s) beschikbaar` : "up-to-date";
+}
+
+async function checkUpdates(silent) {
+  const el = $("#upd-result");
+  if (!silent) { el.className = "result"; el.textContent = "controleren…"; }
+  try {
+    const r = await post("/api/update/check");
+    markUpdateAvailable(r.behind);
+    if (silent) return;
+    el.textContent = "";
+    let html = "";
+    if (r.behind) {
+      html += `<ul class="commits">${r.commits.map((c) =>
+        `<li><span class="mono">${esc(c.commit)}</span>${esc(c.subject)} <span class="hint">${esc(fmtDate(c.date))}</span></li>`).join("")}</ul>`;
+      if (r.otsim_changed) html += `<p class="help">Deze update wijzigt ook de OT-simulators; klik daarna onder <b>2. Lab</b> op <b>Simulators bijwerken</b>.</p>`;
+    } else {
+      el.className = "result ok"; el.textContent = "De controller is up-to-date.";
+    }
+    if (r.dirty.length) {
+      html += `<p class="warn">Lokale wijzigingen in <code>/opt/otlab</code> blokkeren de update:</p><pre class="logbox">${esc(r.dirty.join("\n"))}</pre>`;
+    }
+    $("#upd-commits").innerHTML = html;
+    $("#btn-upd-run").hidden = !r.behind || r.dirty.length > 0;
+  } catch (e) {
+    if (!silent) { el.className = "result bad"; el.textContent = e.message; }
+  }
+}
+$("#btn-upd-check").onclick = () => checkUpdates(false);
+
+$("#btn-upd-run").onclick = async () => {
+  if (!confirm("Controller bijwerken en herstarten? Het lab zelf blijft draaien.")) return;
+  try { await post("/api/update/run"); followUpdate(); }
+  catch (e) { $("#upd-result").className = "result bad"; $("#upd-result").textContent = e.message; }
+};
+
+function followUpdate() {
+  const box = $("#upd-log");
+  box.hidden = false; box.textContent = "";
+  $("#btn-upd-run").hidden = true;
+  const before = currentCommit;
+  let offset = 0, restarting = false;
+  const timer = setInterval(async () => {
+    try {
+      if (!restarting) {
+        const r = await api(`/api/update/log?offset=${offset}`);
+        offset = r.offset;
+        if (r.lines.length) { box.textContent += r.lines.join("\n") + "\n"; box.scrollTop = box.scrollHeight; }
+        if (!r.running) {
+          if (/FOUT|Al up-to-date/.test(box.textContent) && !/herstarten/.test(box.textContent)) { clearInterval(timer); return; }
+          restarting = true;
+          box.textContent += "Wachten tot de controller weer bereikbaar is…\n";
+        }
+      } else {
+        const v = await api("/api/version");
+        if (v.commit && v.commit !== before) { clearInterval(timer); location.reload(); }
+      }
+    } catch (e) {
+      restarting = true; // controller is aan het herstarten
+    }
+  }, 1500);
+}
+$("#btn-update-banner").onclick = () => action("/api/update-sims", {}, loadVersion);
 
 // --- polling ---------------------------------------------------------------
 async function refresh() {
@@ -273,5 +367,6 @@ async function refresh() {
 }
 loadSettings();
 loadHost();
+loadVersion().then((v) => v.git && checkUpdates(true));
 refresh();
 setInterval(refresh, 10000);

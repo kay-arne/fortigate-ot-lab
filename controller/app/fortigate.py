@@ -16,7 +16,7 @@ import paramiko
 import requests
 import urllib3
 
-from .config import get_state, inventory, netmask, segment_map, update_state
+from .config import get_state, inventory, netmask, segment_map, update_state, vm_name
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -31,7 +31,7 @@ def bootstrap_config(topo, state) -> str:
     wan = fgt["wan"]
     lines = [
         "config system global",
-        f'    set hostname "{fgt["name"]}"',
+        f'    set hostname "{vm_name(topo, fgt["name"])}"',
         "    set admintimeout 60",
         f"    set admin-sport {fgt.get('admin_https_port', 443)}",
         "end",

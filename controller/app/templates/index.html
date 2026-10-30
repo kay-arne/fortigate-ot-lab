@@ -13,8 +13,10 @@
     <button data-tab="setup" class="active">1. Setup</button>
     <button data-tab="lab">2. Lab</button>
     <button data-tab="tests">3. Testcenter</button>
+    <button data-tab="updates">Updates <span id="update-dot" class="dot-new" hidden></span></button>
   </nav>
   <span id="hoststatus" class="pill">…</span>
+  <button id="version-pill" class="pill version" data-goto="updates" title="Versie van de controller">…</button>
   <form method="post" action="/logout" class="logout"><button type="submit" class="ghost">Uitloggen</button></form>
 </header>
 
@@ -149,7 +151,7 @@
         <label class="choice"><input type="radio" name="lic" value="fortiflex">
           <span><b>FortiFlex-token</b><small>Token uit het FortiFlex-portal; de FortiGate activeert zichzelf online.</small></span></label>
         <label class="choice"><input type="radio" name="lic" value="none">
-          <span><b>Geen / later</b><small>Evaluatiemodus: beperkt, zonder FortiGuard en OT-signatures.</small></span></label>
+          <span><b>Geen / later</b><small>Evaluatiemodus: maar 3 interfaces (het lab heeft er 7 nodig), geen FortiGuard en geen OT-signatures.</small></span></label>
       </div>
       <div id="lic-file" class="field">
         <label for="f-license">Licentiebestand</label>
@@ -173,6 +175,10 @@
 
   <!-- LAB -->
   <section id="tab-lab" class="tab">
+    <div id="otsim-banner" class="banner" hidden>
+      De OT-simulators in de containers zijn ouder dan de code van de controller (na een update).
+      <button id="btn-update-banner" class="primary">Simulators bijwerken</button>
+    </div>
     <div class="toolbar">
       <button id="btn-deploy" class="primary">Deploy lab</button>
       <button id="btn-provision">FortiGate policies opnieuw toepassen</button>
@@ -197,6 +203,36 @@
         <input id="adhoc-cmd" placeholder="otprobe-commando" size="40">
         <button id="btn-adhoc">Uitvoeren</button>
       </div>
+    </div>
+  </section>
+  <!-- UPDATES -->
+  <section id="tab-updates" class="tab">
+    <div class="card">
+      <div class="card-head"><h2>Controller bijwerken</h2><span id="upd-badge" class="badge"></span></div>
+      <p class="help">De controller is een git-checkout van
+        <a href="https://github.com/kay-arne/fortigate-ot-lab" target="_blank" rel="noopener">kay-arne/fortigate-ot-lab</a>
+        in <code>/opt/otlab</code>. Bijwerken haalt de nieuwste versie op, werkt de Python-dependencies bij en herstart
+        de controller. Je instellingen, uploads, API-key en testresultaten staan in <code>data/</code> en blijven behouden.
+        Het draaiende lab (FortiGate en containers) wordt niet aangeraakt.</p>
+      <table class="kv">
+        <tr><th>Huidige versie</th><td id="upd-current">-</td></tr>
+        <tr><th>Branch</th><td id="upd-branch" class="mono">-</td></tr>
+      </table>
+      <div class="actions">
+        <button id="btn-upd-check">Controleren op updates</button>
+        <button id="btn-upd-run" class="primary" hidden>Nu bijwerken</button>
+        <span id="upd-result" class="result"></span>
+      </div>
+      <div id="upd-commits"></div>
+      <pre id="upd-log" class="logbox" hidden></pre>
+    </div>
+    <div class="card">
+      <h2>Vanaf de Proxmox host</h2>
+      <p class="help">Dezelfde oneliner als bij de installatie herkent een bestaande controller en biedt
+        <b>Bijwerken</b> aan. Gebruik dit als de web UI niet meer bereikbaar is of als er ook iets op de host
+        moet veranderen.</p>
+      <pre class="logbox">bash -c "$(curl -fsSL https://raw.githubusercontent.com/kay-arne/fortigate-ot-lab/main/install.sh)"</pre>
+      <p class="help">Of direct in de controller: <code>/opt/otlab/update.sh</code></p>
     </div>
   </section>
 </main>
