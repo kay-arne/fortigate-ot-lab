@@ -233,6 +233,22 @@ def push_otsim(log, vmid):
                      "&& systemctl daemon-reload", check=True)
 
 
+def sync_packages(log, node):
+    """Python-pakketten in een draaiende container op de vastgezette versies
+    brengen; containers van een ouder template houden anders oude versies."""
+    h = host()
+    _, frozen = h.pct_exec(node["vmid"], "/opt/otsim/venv/bin/pip freeze")
+    installed = {l.strip().lower() for l in frozen.splitlines()}
+    missing = [p for p in PIP_PACKAGES.split() if p.lower() not in installed]
+    if not missing:
+        return
+    log(f"{node['hostname']}: pakketten bijwerken ({' '.join(missing)})")
+    rc, out = h.pct_exec(node["vmid"], f"/opt/otsim/venv/bin/pip install -q {' '.join(missing)}", timeout=600)
+    if rc != 0:
+        log(f"⚠ {node['hostname']}: pip install mislukt (geen internet in dit segment?); "
+            f"rol het LXC-template opnieuw uit. {out.strip()[-200:]}")
+
+
 def _is_template(h, vmid) -> bool:
     return bool(re.search(r"^template:\s*1", h.run(["pct", "config", str(vmid)], check=False), re.M))
 
@@ -243,11 +259,21 @@ def build_template(log, topo):
     vmid = template_vmid(topo)
     if h.exists(vmid):
         if _is_template(h, vmid):
-            log(f"template {vmid} bestaat al, overslaan")
-            return
-        log(f"container {vmid} is een onvoltooid template van een eerdere mislukte build; opnieuw bouwen")
-        h.run(["pct", "stop", str(vmid)], check=False)
-        h.run(["pct", "destroy", str(vmid), "--purge", "1"], log=log)
+            if get_state().get("template_packages") == PIP_PACKAGES:
+                log(f"template {vmid} bestaat al, overslaan")
+                return
+            log(f"template {vmid} heeft een oudere pakketlijst; opnieuw bouwen")
+            try:
+                h.run(["pct", "destroy", str(vmid), "--purge", "1"], log=log)
+            except HostError:
+                # Linked clones houden het template vast; die krijgen de nieuwe
+                # versies via sync_packages bij uitrollen of 'Simulators bijwerken'.
+                log("  template is nog in gebruik door linked clones; pakketten worden per container bijgewerkt")
+                return
+        else:
+            log(f"container {vmid} is een onvoltooid template van een eerdere mislukte build; opnieuw bouwen")
+            h.run(["pct", "stop", str(vmid)], check=False)
+            h.run(["pct", "destroy", str(vmid), "--purge", "1"], log=log)
     tnet = topo["lab"]["template_net"]
     bridge = f"{topo['lab']['uplink_bridge']}{uplink_tag(topo)}"
     log(f"template-LXC {vmid} bouwen (tijdelijk op {bridge.replace(',tag=', ' VLAN ')}, {tnet}, voor packages)")
@@ -271,6 +297,7 @@ def build_template(log, topo):
         h.run(["pct", "stop", str(vmid)])
         h.run(["pct", "set", str(vmid), "--delete", "net0"])
         h.run(["pct", "template", str(vmid)])
+        update_state(template_packages=PIP_PACKAGES)
     except Exception:
         log(f"template-build mislukt; container {vmid} opruimen zodat een nieuwe poging schoon begint")
         h.run(["pct", "stop", str(vmid)], check=False)
@@ -362,6 +389,7 @@ def deploy_node(log, topo, node):
                       "segment": node["segment"], "args": node["args"]})
     h.pct_exec(vmid, f"dpkg-reconfigure -f noninteractive openssh-server >/dev/null 2>&1; "
                      f"systemd-machine-id-setup >/dev/null; echo {shlex.quote(cfg)} > /etc/otsim.json", check=True)
+    sync_packages(log, node)
     if node["kind"] == "device":
         h.pct_exec(vmid, "systemctl enable --now otsim", check=True)
     setup_access(log, node)
@@ -419,6 +447,7 @@ def update_simulators(log):
         if host().status(node["vmid"]) == "running":
             log(f"otsim bijwerken op {node['hostname']}")
             push_otsim(log, node["vmid"])
+            sync_packages(log, node)
             if node["kind"] == "device":
                 host().pct_exec(node["vmid"], "systemctl restart otsim")
             setup_access(log, node)
