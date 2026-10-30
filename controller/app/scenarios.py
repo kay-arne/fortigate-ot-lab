@@ -44,7 +44,7 @@ def run_scenario(log, scenario_id: str):
     log(f"[{sc['id']}] {sc['title']}")
     log(f"  vanaf {sc['from']}: otprobe {sc['run']}")
     started = time.time()
-    res = run_command(sc["from"], sc["run"])
+    res = run_command(sc["from"], sc["run"], timeout=sc.get("timeout", 120))
     outcome = "allowed" if res.get("ok") else "blocked"
     passed = outcome == sc["expect"]
     log(f"  resultaat: {outcome} (verwacht {sc['expect']}) -> {'PASS' if passed else 'FAIL'}")

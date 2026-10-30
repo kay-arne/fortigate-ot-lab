@@ -25,7 +25,10 @@ def out(ok, detail):
 
 
 def cmd_scan(target, ports):
-    p = subprocess.run(["nmap", "-Pn", "-n", "-sT", "--max-retries", "1", "--host-timeout", "60s",
+    # Een FortiGate dropt geweigerd verkeer stil; korte RTT-timeouts houden een
+    # /24-scan op filtered poorten binnen de tijd van een test.
+    p = subprocess.run(["nmap", "-Pn", "-n", "-sT", "-T4", "--max-retries", "1", "--initial-rtt-timeout", "300ms",
+                        "--max-rtt-timeout", "500ms", "--host-timeout", "20s",
                         "-p", ports, "-oG", "-", target], capture_output=True, text=True, timeout=600)
     found = []
     for line in p.stdout.splitlines():

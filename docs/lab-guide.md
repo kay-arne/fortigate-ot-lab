@@ -107,6 +107,9 @@ mensen niks te doen."*
 
 - Open in het Testcenter het kijkvenster **SCADA HMI**: live tankniveau, setpoint
   en de transportband. Laat het open staan; je ziet de tank vullen en leeglopen.
+
+![Kijkvenster SCADA HMI: alle drie de PLC's OK, met live registerwaarden](img/00-hmi.jpg)
+
 - Open ook de **historian**: die verzamelt dezelfde data, maar dan een laag hoger.
 - Lees de tank-PLC direct uit (ad-hoc, device `ews`):
   - `modbus-read 10.10.0.10 0 4`: HR0 niveau, HR1 setpoint, HR2 pomp aan/uit.
@@ -133,7 +136,10 @@ hebben we, en wie praat ermee?" Er is geen assetlijst.*
     Een device dat de FortiGate op die poort ontdekt, valt automatisch in die laag;
   - de Application Control-logs, waar OPC UA, Modbus en S7 als applicatie
     zichtbaar zijn en niet als "TCP 4840" of "TCP 502".
+
 ![Asset Identity Center: devices per segment, herkend aan hun verkeer](img/fgt-assets.jpg)
+
+![OT View: dezelfde assets per Purdue-level, met de FortiGate in L3](img/fgt-otview.jpg)
 
 - Vraag de groep: welk device staat in de "verkeerde" laag? Pas het level van één
   asset handmatig aan en laat zien dat een handmatige keuze voorgaat op die van de poort.
@@ -168,7 +174,11 @@ kantoornetwerk en doet wat elke aanvaller als eerste doet: rondkijken.*
 
 **Onthulling**
 Beide pogingen worden geblokkeerd. In de forward traffic-log staat elke poging met
-bron-IP, doel en poort, afgehandeld door de implicit deny.
+bron-IP, doel en poort, afgehandeld door de implicit deny. Let op de kolom
+*Application Name*: ook verkeer dat nooit is doorgelaten, herkent de FortiGate als
+`OT-Modbus`, `OT-S7comm` of `OT-OPCUA`.
+
+![Forward traffic: de scan vanaf IT (10.99.0.250), elke poging een implicit deny](img/fgt-forward-deny.jpg)
 
 **Les**
 - *Zones en conduits*: tussen het IT-netwerk en L1 bestaat geen conduit, dus er komt
@@ -222,6 +232,14 @@ de *function code*:
 - lezen (read holding registers) mag via het OT-readonly-profiel;
 - schrijven (write register) wordt geblokkeerd, zichtbaar in de Application Control-log;
 - de HMI mag wel schrijven, en ook die write staat in de log als audit trail.
+
+Kijk daarna in *Log & Report > Security Events*. Onder Application Control staan
+de doorgelaten en geblokkeerde Industrial-applicaties. Onder Intrusion Prevention
+staan ook detecties als `Modbus.TCP.Unauthorized.Read.Request.PLC`: de IPS-sensor
+staat op monitoren en meldt ook het normale pollen van de HMI. Bespreek met de groep
+waarom je zo'n signature eerst tunet voordat je hem op blokkeren zet.
+
+![Security Events: Industrial-applicaties toegestaan en geblokkeerd, plus de IPS-detecties](img/fgt-security-events.jpg)
 
 **Les**
 - Poortfiltering is niet genoeg: dezelfde poort draagt zowel "kijken" als "ingrijpen".
@@ -315,6 +333,8 @@ wil voor het managementoverleg één overzicht.*
 - Draai in het Testcenter **alle tests**. Elke test is groen als de uitkomst
   overeenkomt met de verwachting (toegestaan of geblokkeerd).
 - Loop de resultaten langs met de logs als bewijs.
+
+![Testcenter: per test de verwachting, de uitkomst en de bijbehorende FortiGate-logregels](img/02-testcenter.jpg)
 
 **Terugblik**
 

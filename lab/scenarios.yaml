@@ -23,6 +23,7 @@ scenarios:
     title: "Netwerkscan vanaf IT richting L1 (502/102/4840)"
     from: probe-test
     run: "scan 10.10.0.0/24 102,502,4840"
+    timeout: 300
     expect: blocked
     why: "Vanaf IT mogen geen OT-services zichtbaar zijn."
     logs: [traffic/forward]
