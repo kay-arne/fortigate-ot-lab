@@ -88,6 +88,8 @@ van Ghost zonder dat er een gat in de firewall nodig is.
 Het contractor-account (`remco`) bestaat alleen op de jump host en de EWS. Het
 wachtwoord wordt één keer gegenereerd en staat in het Testcenter.
 
+![Testcenter: de drie ingangen met URL's, logins en het kijkvenster](img/01-toegang.jpg)
+
 ---
 
 ## Hoofdstuk 0: Rondleiding over de vloer
@@ -98,7 +100,11 @@ mensen niks te doen."*
 
 **Actie**
 - Open de Lab-tab en loop de Purdue-lagen van boven naar beneden langs: van jouw
-  IT-netwerk via de FortiGate naar L3.5 tot en met L0.
+  IT-netwerk via de FortiGate naar L3.5 tot en met L0. De FortiGate-kaart is groen
+  zolang zijn REST API antwoordt.
+
+![Lab-tab: de fabriek in Purdue-lagen, elke laag een eigen FortiGate-poort](img/00-lab-overzicht.jpg)
+
 - Open in het Testcenter het kijkvenster **SCADA HMI**: live tankniveau, setpoint
   en de transportband. Laat het open staan; je ziet de tank vullen en leeglopen.
 - Open ook de **historian**: die verzamelt dezelfde data, maar dan een laag hoger.
@@ -119,11 +125,16 @@ hebben we, en wie praat ermee?" Er is geen assetlijst.*
 - Testcenter: **Historian leest OPC UA bij de gateway** (`historian-opcua`). Draai
   gerust ook een paar andere tests, zodat elk device verkeer heeft gemaakt.
 - In de FortiGate-GUI:
-  - de asset-weergave, met de **Purdue-levels** ingeschakeld. Elke segmentpoort
-    heeft een standaard-level (port2 L3.5, port3 L3, port4 L2, port5 L1, port6 L0, of L1 als deze FortiOS-versie L0 niet kent).
+  - *Security Fabric > Asset Identity Center*, tabblad **Asset Identity List**:
+    elk device met MAC-adres, IP-adres en de poort (laag) waarop het gezien is;
+  - hetzelfde, tabblad **OT View**: de assets per Purdue-level. Elke segmentpoort
+    heeft een standaard-level (port2 L3.5, port3 L3, port4 L2, port5 L1, port6 L1,
+    port7 L4). FortiOS 7.6 kent op interfaces geen level 0, dus de field I/O valt in L1.
     Een device dat de FortiGate op die poort ontdekt, valt automatisch in die laag;
   - de Application Control-logs, waar OPC UA, Modbus en S7 als applicatie
     zichtbaar zijn en niet als "TCP 4840" of "TCP 502".
+![Asset Identity Center: devices per segment, herkend aan hun verkeer](img/fgt-assets.jpg)
+
 - Vraag de groep: welk device staat in de "verkeerde" laag? Pas het level van één
   asset handmatig aan en laat zien dat een handmatige keuze voorgaat op die van de poort.
 
@@ -262,13 +273,18 @@ zomerstop", zegt Sanne. "Tot die tijd draait deze PLC zoals hij draait."*
 
 **Actie**
 - In de FortiGate-GUI:
-  - het virtual patching-profiel `OT-vpatch`: blokkeren en loggen op alle
-    severities, op basis van de OT-signatures van FortiGuard;
-  - de firewall-policies: elke conduit die de fabriek in gaat, heeft dit profiel
-    naast de IPS-sensor `OT-IPS`;
-  - de lijst met OT-signatures: zoek op de leverancier of het protocol van de
-    PLC's (Modbus, Siemens S7) en laat zien hoeveel bekende kwetsbaarheden er al
-    een signature hebben.
+  - *Security Profiles > Virtual Patching*: het profiel `OT-vpatch` blokkeert en
+    logt op alle severities. De kolom *Ref.* laat zien op hoeveel policies het staat;
+  - *Policy & Objects > Firewall Policy*: elke conduit die de fabriek in gaat, heeft
+    naast `OT-IPS` ook het label **VPATCH OT-vpatch**;
+  - *Security Profiles > Virtual Patching Signatures*: zoek op de leverancier of het
+    protocol van de PLC's (Modbus, Siemens S7) en laat zien hoeveel bekende
+    kwetsbaarheden er al een signature hebben.
+
+![Virtual patching-profiel OT-vpatch, gebruikt door 12 policies](img/fgt-vpatch.jpg)
+
+![Firewall-policies per Purdue-conduit, met IPS en virtual patching](img/fgt-policies.jpg)
+
 - Koppel het terug aan hoofdstuk 4: welk verkeer mag überhaupt bij de tank-PLC
   komen? Alleen de HMI, de EWS, de OPC UA-gateway en (lezend) L3. Virtual patching
   inspecteert juist dat toegestane verkeer.
