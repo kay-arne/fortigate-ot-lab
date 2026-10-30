@@ -16,11 +16,28 @@ import paramiko
 import requests
 import urllib3
 
-from .config import get_state, inventory, netmask, segment_map, update_state, vm_name
+from .config import DATA, get_state, inventory, netmask, segment_map, update_state, vm_name
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 API_USER = "otlab-controller"
+FGT_KEY = DATA / "fgt_admin_rsa"
+
+
+def admin_key() -> paramiko.RSAKey:
+    """SSH-sleutel waarmee de controller als admin op de FortiGate inlogt.
+    De publieke sleutel gaat via cloud-init mee (ssh-public-key1), zodat de
+    controller niet afhankelijk is van het admin-wachtwoord."""
+    if not FGT_KEY.exists():
+        key = paramiko.RSAKey.generate(3072)
+        key.write_private_key_file(str(FGT_KEY))
+        FGT_KEY.chmod(0o600)
+    return paramiko.RSAKey.from_private_key_file(str(FGT_KEY))
+
+
+def admin_pubkey() -> str:
+    key = admin_key()
+    return f"{key.get_name()} {key.get_base64()}"
 
 
 # --------------------------------------------------------------------------
@@ -38,6 +55,7 @@ def bootstrap_config(topo, state) -> str:
         "config system admin",
         "    edit admin",
         f'        set password "{state["fgt_admin_password"]}"',
+        f'        set ssh-public-key1 "{admin_pubkey()}"',
         "    next",
         "end",
         "config system interface",
@@ -132,13 +150,41 @@ def wait_reachable(log, topo, timeout=1200):
     raise RuntimeError("FortiGate werd niet bereikbaar binnen de timeout.")
 
 
-def ssh_cli(topo, commands: list[str], wait=2.0) -> str:
-    """Voer CLI-regels uit over SSH (interactieve shell)."""
-    state = get_state()
+def _ssh_connect(topo) -> paramiko.SSHClient:
+    """Log in als admin: eerst met de SSH-sleutel uit cloud-init, dan met het wachtwoord."""
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(mgmt_ip(topo), username="admin", password=state["fgt_admin_password"],
+    client.connect(mgmt_ip(topo), username="admin", pkey=admin_key(),
+                   password=get_state().get("fgt_admin_password"),
                    look_for_keys=False, allow_agent=False, timeout=15)
+    return client
+
+
+def wait_for_ssh(log, topo, timeout=600):
+    """Wacht tot admin kan inloggen. Vlak na de eerste boot (logdisk formatteren,
+    FortiFlex-activatie) herstart de FortiGate nog; dan weigert SSH tijdelijk."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        try:
+            _ssh_connect(topo).close()
+            log("SSH-login als admin gelukt")
+            return
+        except (paramiko.SSHException, OSError) as e:
+            if str(e) != last:
+                log(f"  SSH nog niet gelukt ({e}); opnieuw proberen...")
+                last = str(e)
+            time.sleep(15)
+    raise RuntimeError(
+        "Kan niet als admin inloggen op de FortiGate (sleutel en wachtwoord geweigerd). "
+        "Controleer via de Proxmox-console: log in als admin en draai 'diagnose debug cloudinit show' "
+        "om te zien of de admin-config (wachtwoord/ssh-public-key1) is toegepast. Is de FortiGate "
+        "uitgerold met een oudere controllerversie (zonder SSH-sleutel), rol hem dan opnieuw uit.")
+
+
+def ssh_cli(topo, commands: list[str], wait=2.0) -> str:
+    """Voer CLI-regels uit over SSH (interactieve shell)."""
+    client = _ssh_connect(topo)
     shell = client.invoke_shell(width=250)
     time.sleep(1)
     out = ""
@@ -264,8 +310,11 @@ def _resolve_ot_apps(api, log):
 
 def provision(log, topo):
     wait_reachable(log, topo)
-    time.sleep(20)  # services na GUI-start nog even laten settelen
-    connectivity_test(log, topo)
+    wait_for_ssh(log, topo)
+    try:
+        connectivity_test(log, topo)
+    except Exception as e:  # noqa: BLE001 - alleen diagnose, niet fataal
+        log(f"⚠ connectiviteitstest overgeslagen: {e}")
     ensure_license(log, topo)
     ensure_api_key(log, topo)
     api = Api(topo)

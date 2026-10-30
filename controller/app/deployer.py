@@ -120,6 +120,8 @@ def deploy_fortigate(log, topo):
     h.put(iso_local, f"{h.workdir}/{ISO_NAME}")
     h.run(["install", "-m", "0644", f"{h.workdir}/{ISO_NAME}", f"/var/lib/vz/template/iso/{ISO_NAME}"])
 
+    # nieuwe FortiGate: API-key en provisioning van een eventuele vorige zijn ongeldig
+    update_state(fgt_api_key=None, fgt_provisioned=False)
     try:
         create_fortigate_vm(log, topo, hcfg["storage"], remote_img)
     except Exception:
