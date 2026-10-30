@@ -295,6 +295,19 @@ class Api:
         return r.json()
 
 
+def api_status(topo) -> dict | None:
+    """Snelle check of de REST API antwoordt (voor de statusweergave).
+    None als er nog geen API-key is."""
+    if not get_state().get("fgt_api_key"):
+        return None
+    try:
+        r = Api(topo).s.get(f"{base_url(topo)}/api/v2/monitor/system/status", timeout=3)
+        r.raise_for_status()
+        return {"ok": True, "version": r.json().get("version", "")}
+    except (requests.RequestException, ValueError) as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
 # --------------------------------------------------------------------------
 # provisioning na de eerste boot
 # --------------------------------------------------------------------------
@@ -324,12 +337,13 @@ def connectivity_test(log, topo):
     out = ssh_cli(topo, ["get router info routing-table static", "get system dns",
                          "execute ping-options repeat-count 2",
                          "execute ping update.fortiguard.net"])
-    resolved = re.search(r"PING update\.fortiguard\.net \(([\d.]+)\)", out)
+    # FortiOS toont de CNAME, bijv. 'PING fds1.fortinet.com (173.243.138.71)'
+    resolved = re.search(r"^PING (\S+) \(([\d.]+)\)", out, re.M)
     replies = re.search(r"(\d+) packets received", out)
     if not resolved:
         log("✖ DNS: update.fortiguard.net wordt niet opgelost. Controleer de DNS-servers.")
     else:
-        log(f"✔ DNS: update.fortiguard.net -> {resolved.group(1)}")
+        log(f"✔ DNS: update.fortiguard.net -> {resolved.group(1)} ({resolved.group(2)})")
         if replies and int(replies.group(1)) > 0:
             log("✔ internet: ping-antwoord ontvangen")
         else:

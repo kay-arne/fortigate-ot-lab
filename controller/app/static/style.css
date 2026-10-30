@@ -143,9 +143,8 @@ button:disabled { opacity: .45; cursor: not-allowed; filter: none; }
 .infra { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; }
 .comp { display: flex; align-items: flex-start; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer; }
 .comp .dot { margin-top: 5px; }
+.comp.comp-ok { background: #12271c; border-color: var(--ok); }
 .comp .ip { font-size: 12px; color: var(--muted); }
-.fgtcomp { background: #2a1414; border-color: var(--accent); }
-.fgtcomp b { color: #ff8a80; }
 .node { cursor: pointer; }
 [data-comp] input[type=checkbox] { pointer-events: none; margin: 2px 6px 0 0; width: auto; display: inline; }
 [data-comp].selected { outline: 2px solid #3b9cff; outline-offset: -1px; }

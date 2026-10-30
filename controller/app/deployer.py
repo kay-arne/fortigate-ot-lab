@@ -37,10 +37,14 @@ def lab_status() -> dict:
         return r.get("status", "unknown") if r else "absent"
 
     links = set(h.run("ls /sys/class/net").split())
+    fgt_status = st(topo["fortigate"]["vmid"])
+    api = fortigate.api_status(topo) if fgt_status == "running" else None
     return {
-        "fortigate": {"vmid": topo["fortigate"]["vmid"], "status": st(topo["fortigate"]["vmid"]),
+        "fortigate": {"vmid": topo["fortigate"]["vmid"], "status": fgt_status,
                       "name": vm_name(topo, topo["fortigate"]["name"]),
-                      "wan": topo["fortigate"]["wan"], "api": bool(get_state().get("fgt_api_key"))},
+                      "wan": topo["fortigate"]["wan"], "api": bool(get_state().get("fgt_api_key")),
+                      "api_ok": bool(api and api["ok"]), "version": (api or {}).get("version", ""),
+                      "api_error": (api or {}).get("error", "")},
         "template": {"vmid": template_vmid(topo), "status": st(template_vmid(topo))},
         "segments": [{**s, "present": s["bridge"] in links} for s in topo["segments"]],
         "nodes": [{**i, "status": st(i["vmid"])} for i in inventory(topo)],

@@ -84,10 +84,10 @@ function renderLab(lab) {
     <div class="zone" style="border-left-color:#666"><div class="meta"><b>L4/L5 Enterprise</b><div class="lvl">fysiek netwerk (vmbr0)</div></div>
       <div class="nodes"><div class="node"><div class="n">Jouw IT-netwerk</div><div class="ip">enige toegang loopt via de FortiGate</div></div></div></div>
     <div class="infra">
-      <div class="comp fgtcomp" data-comp="fortigate">${check()}<span class="dot ${f.status}"></span>
-        <div><b>${esc(f.name || "FortiGate")} · ${f.vmid}</b><div class="ip">port1 ${esc(f.wan.ip || f.wan.mode)} · status: ${esc(f.status)}</div></div></div>
-      <div class="comp" data-comp="policies">${check()}<span class="dot ${f.api ? "running" : "absent"}"></span>
-        <div><b>FortiGate-policies</b><div class="ip">REST API ${f.api ? "gekoppeld" : "nog niet gekoppeld"} · adressen, conduits, OT-profielen</div></div></div>
+      <div class="comp${f.api_ok ? " comp-ok" : ""}" data-comp="fortigate">${check()}<span class="dot ${f.status}"></span>
+        <div><b>${esc(f.name || "FortiGate")} · ${f.vmid}</b><div class="ip">port1 ${esc(f.wan.ip || f.wan.mode)} · status: ${esc(f.status)}${f.version ? ` · ${esc(f.version)}` : ""}</div></div></div>
+      <div class="comp" data-comp="policies">${check()}<span class="dot ${f.api_ok ? "running" : f.api ? "stopped" : "absent"}"></span>
+        <div><b>FortiGate-policies</b><div class="ip" title="${esc(f.api_error || "")}">REST API ${f.api_ok ? "antwoordt" : f.api ? "antwoordt niet" : "nog niet gekoppeld"} · adressen, conduits, OT-profielen</div></div></div>
       <div class="comp" data-comp="network">${check()}<span class="dot ${bridges === lab.segments.length ? "running" : bridges ? "stopped" : "absent"}"></span>
         <div><b>Netwerk</b><div class="ip">${bridges}/${lab.segments.length} Purdue-bridges aanwezig</div></div></div>
       <div class="comp" data-comp="template">${check()}<span class="dot ${t.status === "stopped" ? "running" : t.status}"></span>
