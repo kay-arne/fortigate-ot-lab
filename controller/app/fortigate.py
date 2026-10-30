@@ -658,12 +658,13 @@ def provision(log, topo):
 # --------------------------------------------------------------------------
 # logs voor de testcenter-validatie
 # --------------------------------------------------------------------------
-def query_logs(topo, kind: str, srcip: str, since: float, rows=50) -> list[dict]:
-    """kind: traffic/forward | app-ctrl | ips"""
+def query_logs(topo, kind: str, srcip: str, since: float, rows=50, dstip: str | None = None) -> list[dict]:
+    """kind: traffic/forward | app-ctrl | ips. Meerdere filters zijn een AND."""
     api = Api(topo)
     path = f"log/memory/{kind}"
+    filters = [f"srcip=={srcip}"] + ([f"dstip=={dstip}"] if dstip else [])
     try:
-        res = api.get(path, filter=f"srcip=={srcip}", rows=rows)
+        res = api.get(path, filter=filters, rows=rows)
     except requests.HTTPError:
         return []
     out = []

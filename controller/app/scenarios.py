@@ -1,8 +1,12 @@
 """Testcenter: validatietests draaien op probes/devices en FortiGate-logs koppelen."""
 from __future__ import annotations
 
+import ipaddress
 import json
+import threading
 import time
+from collections import defaultdict
+from urllib.parse import urlparse
 
 import yaml
 
@@ -11,6 +15,22 @@ from .config import SCENARIO_FILE, get_state, inventory, load_topology, update_s
 from .hostctl import host
 
 PROBE_CMD = "/opt/otsim/venv/bin/python -m otsim.probe"
+
+# Logregels worden op bron-IP en tijd aan een test gekoppeld; twee tests tegelijk
+# vanaf dezelfde node zouden elkaars regels als bewijs krijgen.
+_node_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+
+
+def _target(command: str):
+    """Doel van een otprobe-commando als netwerk (IP of subnet), of None."""
+    parts = command.split()
+    if len(parts) < 2:
+        return None
+    arg = urlparse(parts[1]).hostname if "://" in parts[1] else parts[1]
+    try:
+        return ipaddress.ip_network(arg, strict=False)
+    except ValueError:
+        return None
 
 
 def load() -> list[dict]:
@@ -40,6 +60,14 @@ def run_command(node_name: str, command: str, timeout=120) -> dict:
 
 def run_scenario(log, scenario_id: str):
     sc = next(s for s in load() if s["id"] == scenario_id)
+    lock = _node_locks[sc["from"]]
+    if lock.locked():
+        log(f"  wacht tot de vorige test op {sc['from']} klaar is")
+    with lock:
+        _run_scenario(log, sc)
+
+
+def _run_scenario(log, sc: dict):
     topo = load_topology()
     log(f"[{sc['id']}] {sc['title']}")
     log(f"  vanaf {sc['from']}: otprobe {sc['run']}")
@@ -52,9 +80,15 @@ def run_scenario(log, scenario_id: str):
 
     time.sleep(4)  # FortiGate schrijft logs met kleine vertraging
     evidence = []
+    target = _target(sc["run"])
+    single = str(target.network_address) if target and target.num_addresses == 1 else None
     if get_state().get("fgt_api_key"):
         for kind in sc.get("logs", []):
-            for r in fortigate.query_logs(topo, kind, res["srcip"], started)[:10]:
+            rows = fortigate.query_logs(topo, kind, res["srcip"], started, rows=200 if target and not single else 50,
+                                        dstip=single)
+            if target and not single:
+                rows = [r for r in rows if r.get("dstip") and ipaddress.ip_address(r["dstip"]) in target]
+            for r in rows[:10]:
                 evidence.append({
                     "type": kind,
                     "action": r.get("action"),
@@ -86,6 +120,7 @@ def run_all(log):
 
 def run_adhoc(log, node_name: str, command: str):
     log(f"{node_name}$ otprobe {command}")
-    res = run_command(node_name, command)
+    with _node_locks[node_name]:
+        res = run_command(node_name, command)
     log(json.dumps(res, indent=2))
 
