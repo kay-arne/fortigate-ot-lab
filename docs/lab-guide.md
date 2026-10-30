@@ -6,7 +6,7 @@ Een verhalende rondgang door het FortiGate OT Lab. Elk hoofdstuk is een scène u
 
 - Doelgroep: engineers, securityteams en klanten die willen zien wat een FortiGate
   in een OT-netwerk doet.
-- Duur: ongeveer 90 minuten voor alle hoofdstukken; hoofdstuk 0 t/m 2 zijn ook los
+- Duur: ongeveer 100 minuten voor alle hoofdstukken; hoofdstuk 0 t/m 2 zijn ook los
   als demo van 20 minuten te geven.
 - Voorbereiding: het lab is volledig uitgerold en in de Lab-tab staat alles op groen
   (FortiGate-kaart groen = REST API antwoordt).
@@ -116,20 +116,33 @@ mensen niks te doen."*
 hebben we, en wie praat ermee?" Er is geen assetlijst.*
 
 **Actie**
-- Testcenter: **Historian leest OPC UA bij de gateway** (`historian-opcua`).
+- Testcenter: **Historian leest OPC UA bij de gateway** (`historian-opcua`). Draai
+  gerust ook een paar andere tests, zodat elk device verkeer heeft gemaakt.
 - In de FortiGate-GUI:
-  - de asset-weergave (device identification staat aan op alle OT-poorten);
+  - de asset-weergave, met de **Purdue-levels** ingeschakeld. Elke segmentpoort
+    heeft een standaard-level (port2 L3.5, port3 L3, port4 L2, port5 L1, port6 L0, of L1 als deze FortiOS-versie L0 niet kent).
+    Een device dat de FortiGate op die poort ontdekt, valt automatisch in die laag;
   - de Application Control-logs, waar OPC UA, Modbus en S7 als applicatie
     zichtbaar zijn en niet als "TCP 4840" of "TCP 502".
+- Vraag de groep: welk device staat in de "verkeerde" laag? Pas het level van één
+  asset handmatig aan en laat zien dat een handmatige keuze voorgaat op die van de poort.
 
 **Onthulling**
-De FortiGate herkent de OT-protocollen aan de inhoud van het verkeer. Het
-OT-monitor-profiel blokkeert niets, maar logt alles.
+- Mark krijgt zijn assetlijst, en meteen per Purdue-laag gesorteerd: de PLC's in
+  L1, de HMI, OPC UA-gateway en EWS in L2, de historian en het MES in L3.
+- De FortiGate herkent de OT-protocollen aan de inhoud van het verkeer. Het
+  OT-monitor-profiel blokkeert niets, maar logt alles.
 
 **Les**
 - Zichtbaarheid komt eerst: je kunt niet beschermen wat je niet ziet.
+- Een assetlijst per Purdue-laag is het startpunt voor zones en conduits: je ziet
+  welke devices bij elkaar horen en welke communicatie tussen lagen nodig is.
 - Begin in de praktijk met een monitor-profiel, en blokkeer pas als je weet wat normaal is.
-- IEC 62443: FR6, *timely response to events*. Logging is de basis.
+- IEC 62443: FR6, *timely response to events*, en de *zone-indeling* uit 62443-3-2.
+
+> Purdue-levels en de OT-weergave vragen de OT-licentie (FortiGuard Industrial
+> Security Service). Zie je ze niet, controleer dan de joblog van de
+> policy-uitrol: daar staat welke OT-features de controller kon inschakelen.
 
 ## Hoofdstuk 2: Ghost kijkt rond
 
@@ -238,6 +251,45 @@ PLC's en de EWS mogen bij L0.
 - Verkeer volgt het Purdue-model: bekende richtingen en bekende partners, de rest is deny.
 - Segmentatie beperkt de *blast radius*: één besmet device is niet meteen de hele fabriek.
 
+## Hoofdstuk 7: Het lek dat niet dicht kan
+
+*03:00. Sanne leest een security-advisory: de firmware van de tank-PLC heeft een
+bekende kwetsbaarheid. De leverancier heeft een update, maar die vraagt een
+herstart van de PLC en een hertest van het proces. "Dat kan pas bij de
+zomerstop", zegt Sanne. "Tot die tijd draait deze PLC zoals hij draait."*
+
+**Voorspel**: hoe bescherm je een systeem dat je maanden niet mag patchen?
+
+**Actie**
+- In de FortiGate-GUI:
+  - het virtual patching-profiel `OT-vpatch`: blokkeren en loggen op alle
+    severities, op basis van de OT-signatures van FortiGuard;
+  - de firewall-policies: elke conduit die de fabriek in gaat, heeft dit profiel
+    naast de IPS-sensor `OT-IPS`;
+  - de lijst met OT-signatures: zoek op de leverancier of het protocol van de
+    PLC's (Modbus, Siemens S7) en laat zien hoeveel bekende kwetsbaarheden er al
+    een signature hebben.
+- Koppel het terug aan hoofdstuk 4: welk verkeer mag überhaupt bij de tank-PLC
+  komen? Alleen de HMI, de EWS, de OPC UA-gateway en (lezend) L3. Virtual patching
+  inspecteert juist dat toegestane verkeer.
+
+**Onthulling**
+De aanval hoeft de PLC niet meer te bereiken: de FortiGate staat ervoor en
+herkent het misbruik van de kwetsbaarheid in het verkeer, ook als dat over een
+toegestane conduit komt. De PLC blijft ongepatcht, maar is niet meer kwetsbaar
+vanuit het netwerk.
+
+**Les**
+- In OT is patchen vaak maanden weg; virtual patching overbrugt die periode.
+- Het werkt alleen goed in combinatie met segmentatie: hoe minder conduits naar
+  een kwetsbaar device, hoe kleiner het aanvalsoppervlak dat je moet bewaken.
+- Virtual patching vervangt de echte patch niet: plan hem alsnog in voor de stop.
+- IEC 62443: FR3 *system integrity* en het patchmanagement uit 62443-2-3.
+
+> Een demo waarin Ghost de kwetsbaarheid echt aanvalt en het profiel ziet
+> ingrijpen, zit nog niet in het lab (zie *Uitbreidingen*). Dit hoofdstuk laat
+> daarom de inrichting zien en waarom die werkt.
+
 ## Afsluiting: het rapport voor Mark
 
 *06:00. De ochtendploeg komt binnen. De tank staat op niveau, de band loopt. Mark
@@ -252,12 +304,13 @@ wil voor het managementoverleg één overzicht.*
 
 | Hoofdstuk | Wat aangetoond | IEC 62443 |
 |---|---|---|
-| 1 | OT-protocollen zichtbaar, assets herkend | FR6 |
+| 1 | OT-protocollen zichtbaar, assets per Purdue-laag | FR6 |
 | 2 | Geen pad van IT naar OT, verkenning gelogd | FR5 |
 | 3 | Remote access via één gecontroleerd punt | FR1, FR5 |
 | 4 | Lezen ja, schrijven nee op dezelfde poort | FR2, FR3 |
 | 5 | Engineering-acties alleen vanaf de EWS | FR2 |
 | 6 | Geen lateral movement tussen lagen | FR5 |
+| 7 | Ongepatchte PLC beschermd door virtual patching | FR3 |
 
 ---
 
@@ -268,9 +321,10 @@ Deze scènes passen in het verhaal, maar vragen nog bouwwerk:
 - **"Breek het"**: zet de write-blokkade tijdelijk uit en laat zien hoe Ghost de
   tank laat overlopen (het procesmodel en de HMI tonen het effect). Een sterke
   voor/na-demo.
-- **Virtual patching**: een kwetsbare dienst op een PLC aanvallen en een
-  IPS-signature laten ingrijpen. De IPS-sensor met OT-signatures staat er al; een
-  exploit-simulatie die erop triggert nog niet.
+- **Virtual patching in actie** (hoofdstuk 7): Ghost valt de kwetsbare PLC echt
+  aan en het profiel `OT-vpatch` grijpt in. Het profiel en de IPS-sensor staan er al;
+  een `otprobe`-commando dat een herkend aanvalspatroon stuurt nog niet. Welke
+  signature betrouwbaar triggert, moet op een FortiGate met OT-licentie uitgezocht worden.
 - **Asset inventory als test**: het Testcenter laten controleren dat de FortiGate
   alle devices herkent.
 - **Uitbraak naar internet**: alleen de patch-server in de DMZ mag naar buiten;
