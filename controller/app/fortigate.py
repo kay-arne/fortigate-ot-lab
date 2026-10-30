@@ -413,6 +413,40 @@ def ensure_admin_password(log, topo):
     log("✔ admin-wachtwoord ingesteld en getest")
 
 
+# GUI-wizard bij de eerste login (FortiCare-registratie, FortiConverter, patch-
+# upgrades, dashboard). Niet elke optie bestaat in elke 7.x-release; de REST API
+# negeert onbekende velden, dus na het zetten lezen we terug wat is blijven staan.
+GUI_GLOBAL_OFF = {
+    "gui-forticare-registration-setup-warning": "disable",
+    "gui-auto-upgrade-setup-warning": "disable",
+    "gui-firmware-upgrade-setup-warning": "disable",
+    "gui-firmware-upgrade-warning": "disable",
+    "gui-cdn-usage": "disable",
+}
+
+
+def suppress_setup_wizard(log, api):
+    """Zet de vragen bij de eerste GUI-login uit (lab: geen FortiCare-registratie)."""
+    try:
+        api.put("cmdb/system/global", GUI_GLOBAL_OFF)
+        cur = api.get("cmdb/system/global").get("results", {})
+    except (RuntimeError, requests.RequestException) as e:
+        log(f"⚠ setup-wizard uitzetten mislukt: {e}")
+        return
+    applied = [k for k, v in GUI_GLOBAL_OFF.items() if cur.get(k) == v]
+    unknown = [k for k in GUI_GLOBAL_OFF if k not in cur]
+    log(f"setup-wizard bij eerste login: {len(applied)} instelling(en) uit"
+        + (f"; niet in deze FortiOS-versie: {', '.join(unknown)}" if unknown else ""))
+    # 'What's new' en dashboard-keuze zijn per admin; markeer de huidige release als gezien.
+    try:
+        ver = api.get("monitor/system/status").get("version", "")
+        m = re.match(r"v?(\d+\.\d+)", ver)
+        if m:
+            api.put("cmdb/system/admin/admin", {"gui-ignore-release-overview-version": m.group(1)})
+    except (RuntimeError, requests.RequestException) as e:
+        log(f"  release-overzicht niet uitgezet: {e}")
+
+
 def _resolve_ot_apps(api, log):
     """Zoek OT application-signatures op in de FortiGuard-database van de FortiGate."""
     res = api.get("cmdb/application/name", format="name|id|category")
@@ -438,6 +472,7 @@ def provision(log, topo):
     ensure_api_key(log, topo)
     ensure_admin_password(log, topo)
     api = Api(topo)
+    suppress_setup_wizard(log, api)
     segs = segment_map(topo)
     nodes = {n["name"]: n for n in inventory(topo)}
 
