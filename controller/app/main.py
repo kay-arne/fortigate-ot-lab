@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import auth, deployer, fortigate, jobs, scenarios, updates
-from .config import (DATA, HOST_FILE, UPLOADS, get_state, inventory, load_host, load_topology,
+from .config import (DATA, HOST_FILE, UPLOADS, contractor_credentials, get_state, inventory, load_host, load_topology,
                      template_vmid, update_state)
 from .hostctl import host
 
@@ -420,6 +420,49 @@ def run_all():
 @app.post("/api/scenarios/{sid}/run")
 def run_one(sid: str):
     return _start(f"Test {sid}", scenarios.run_scenario, sid, exclusive=False)
+
+
+# --- toegang voor de kandidaat ------------------------------------------
+@app.get("/api/access")
+def access():
+    """Hoe de kandidaat (die net als de controller buiten de OT-omgeving zit)
+    het lab in komt: FortiGate-GUI, jump host via de VIP en het kijkvenster."""
+    topo = load_topology()
+    nodes = {n["name"]: n for n in inventory(topo)}
+    user, pw = contractor_credentials()
+    try:
+        wan_ip, fgt_url = fortigate.mgmt_ip(topo), fortigate.base_url(topo)
+    except RuntimeError:
+        wan_ip, fgt_url = "", ""
+    jump, ews = nodes.get("dmz-jump"), nodes.get("ews")
+    return {
+        "fgt_url": fgt_url, "fgt_user": "admin", "fgt_password": get_state().get("fgt_admin_password") or "",
+        "wan_ip": wan_ip, "jump_port": 2222, "user": user, "password": pw,
+        "jump_ip": jump["ip"] if jump else "", "ews_ip": ews["ip"] if ews else "",
+        "viewers": [{"name": n["name"], "hostname": n["hostname"], "ip": n["ip"], "role": n["role"],
+                     "segment": n["segment"], "title": n["args"].get("title", "")}
+                    for n in nodes.values() if deployer.view_port(n)],
+    }
+
+
+VIEW_PATH = re.compile(r"/[\w./?=&%-]*")
+META_REFRESH = re.compile(r"<meta[^>]+http-equiv=[\"']?refresh[^>]*>", re.I)
+
+
+@app.get("/api/view/{name}")
+def view(name: str, path: str = "/"):
+    """Webinterface van een device, opgehaald in de container zelf."""
+    if not VIEW_PATH.fullmatch(path):
+        raise HTTPException(400, "ongeldig pad")
+    node = next((n for n in inventory(load_topology()) if n["name"] == name), None)
+    if not node or not deployer.view_port(node):
+        raise HTTPException(404, "geen webinterface")
+    try:
+        html = deployer.fetch_view(node, path)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, str(e))
+    # de UI ververst zelf; een meta-refresh zou het venster laten verspringen
+    return HTMLResponse(META_REFRESH.sub("", html), headers=NO_CACHE)
 
 
 class Adhoc(BaseModel):

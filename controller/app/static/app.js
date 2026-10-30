@@ -15,7 +15,7 @@ const post = (path, data) => api(path, { method: "POST", body: JSON.stringify(da
 function goTo(tab) {
   $$("nav button").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
   $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + tab));
-  if (tab === "tests") loadScenarios();
+  if (tab === "tests") { loadScenarios(); loadAccess(); }
   if (tab === "setup") loadSettings();
   if (tab === "updates") loadVersion();
 }
@@ -322,6 +322,57 @@ async function loadScenarios() {
   $("#adhoc-node").innerHTML = topo.nodes.map((n) => `<option value="${esc(n.name)}">${esc(n.hostname || n.name)}</option>`).join("");
 }
 $("#btn-runall").onclick = () => action("/api/scenarios/run-all", {}, loadScenarios);
+
+// --- toegang voor de kandidaat ---------------------------------------------
+const VIEW_LABEL = { hmi: "SCADA HMI", historian: "Historian" };
+async function loadAccess() {
+  const a = await api("/api/access");
+  const wan = a.wan_ip || "&lt;WAN-IP&gt;";
+  const viewers = a.viewers.map((v) =>
+    `<button class="ghost" data-view="${esc(v.name)}" title="${esc(v.hostname)} · ${esc(v.ip)}">${esc(v.title || VIEW_LABEL[v.role] || v.hostname)}</button>`).join(" ");
+  $("#access").innerHTML = `
+    <div class="acc"><h3>1. FortiGate-GUI <span class="tag">security-team</span></h3>
+      <p>Logs, policies en assets: hier zie je wát er gebeurde.</p>
+      <table class="kv"><tr><th>URL</th><td>${a.fgt_url ? `<a href="${esc(a.fgt_url)}" target="_blank" rel="noopener">${esc(a.fgt_url)}</a>` : "-"}</td></tr>
+        <tr><th>Login</th><td><span class="mono">${esc(a.fgt_user)}</span> / ${secretRow("acc-fgtpw", a.fgt_password)}</td></tr></table></div>
+    <div class="acc"><h3>2. Contractor via jump host <span class="tag">door de FortiGate</span></h3>
+      <p>Het pad van Remco: SSH via de VIP naar de jump host in de DMZ, en van daar alleen naar de EWS.</p>
+      <table class="kv"><tr><th>Jump host</th><td><code>ssh -p ${a.jump_port} ${esc(a.user)}@${wan}</code></td></tr>
+        <tr><th>Daarna EWS</th><td><code>ssh ${esc(a.user)}@${esc(a.ews_ip)}</code></td></tr>
+        <tr><th>Wachtwoord</th><td>${secretRow("acc-pw", a.password)}</td></tr></table>
+      <p class="hint">Op beide machines staat <code>otprobe</code>, bijv. <code>otprobe s7-read 10.10.0.20</code>.</p></div>
+    <div class="acc"><h3>3. Op de vloer <span class="tag">via Proxmox</span></h3>
+      <p>Tests en ad-hoc commando's draaien ín het gekozen device. Het kijkvenster toont de webinterface van een device,
+        zonder gat in de firewall.</p>
+      <div class="row">${viewers || "-"}</div></div>`;
+  $$("#access [data-eye]").forEach((b) => b.addEventListener("click", () => {
+    const input = $("#" + b.dataset.eye);
+    input.type = input.type === "password" ? "text" : "password";
+    b.classList.toggle("open", input.type === "text");
+  }));
+  $$("#access [data-view]").forEach((b) => (b.onclick = () => openViewer(b.dataset.view, b.textContent)));
+}
+
+let viewerTimer = null;
+async function refreshViewer(name) {
+  try {
+    const r = await fetch(`/api/view/${encodeURIComponent(name)}`, { credentials: "same-origin" });
+    if (r.status === 401) { location.href = "/login"; return; }
+    const body = await r.text();
+    if (!r.ok) throw new Error((JSON.parse(body).detail) || r.statusText);
+    $("#viewer-frame").srcdoc = body;
+    $("#viewer-status").textContent = "bijgewerkt " + new Date().toLocaleTimeString("nl-NL");
+  } catch (e) { $("#viewer-status").textContent = "fout: " + e.message; }
+}
+function openViewer(name, title) {
+  $("#viewer-title").textContent = title;
+  $("#viewer-frame").srcdoc = "";
+  $("#viewer").hidden = false;
+  refreshViewer(name);
+  clearInterval(viewerTimer);
+  viewerTimer = setInterval(() => refreshViewer(name), 5000);
+}
+$("#viewer-close").onclick = () => { $("#viewer").hidden = true; clearInterval(viewerTimer); };
 $("#btn-adhoc").onclick = () => action("/api/adhoc", { node: $("#adhoc-node").value, command: $("#adhoc-cmd").value });
 
 // --- updates -----------------------------------------------------------------

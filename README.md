@@ -105,7 +105,11 @@ geen harde sandbox. Kies je in de wizard voor root, dan komt de sleutel in
    mislukte container opnieuw te doen zonder het hele lab af te breken.
 4. **Testcenter**: draai de validatietests of eigen ad-hoc tests. Per test zie je PASS/FAIL en de
    FortiGate-logregels (policy, applicatie, signature) die erbij horen.
-5. **Demo of training**: volg de [lab guide](docs/lab-guide.md), een verhalende rondgang
+5. **Toegang voor de kandidaat**: bovenaan het Testcenter staan de drie ingangen: de FortiGate-GUI,
+   SSH als contractor (`remco`) via de VIP naar de jump host en door naar de EWS, en een kijkvenster dat de
+   webinterface van HMI, historian, MES en de DMZ-servers toont (opgehaald via Proxmox, zonder gat in de firewall).
+   Bestaand lab? Klik op *Simulators bijwerken* om het account en `otprobe` op de devices te zetten.
+6. **Demo of training**: volg de [lab guide](docs/lab-guide.md), een verhalende rondgang
    ("een nacht bij Polderfris") langs alle tests, met per hoofdstuk de les en de koppeling naar IEC 62443.
 
 ## Wat zit erin

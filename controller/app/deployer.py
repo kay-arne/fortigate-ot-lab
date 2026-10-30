@@ -13,7 +13,7 @@ from email.mime.text import MIMEText
 from pathlib import Path
 
 from . import fortigate, updates
-from .config import (ROOT, UPLOADS, get_state, inventory, load_host, load_topology,
+from .config import (ROOT, UPLOADS, contractor_credentials, get_state, inventory, load_host, load_topology,
                      prefixlen, segment_map, template_vmid, update_state,
                      uplink_tag, vm_name)
 from .hostctl import HostError, host
@@ -364,8 +364,52 @@ def deploy_node(log, topo, node):
                      f"systemd-machine-id-setup >/dev/null; echo {shlex.quote(cfg)} > /etc/otsim.json", check=True)
     if node["kind"] == "device":
         h.pct_exec(vmid, "systemctl enable --now otsim", check=True)
-        if node["role"] in ("jumphost", "ews"):
-            h.pct_exec(vmid, "systemctl enable --now ssh")
+    setup_access(log, node)
+
+
+OTPROBE_WRAPPER = '#!/bin/sh\ncd /opt/otsim && exec /opt/otsim/venv/bin/python -m otsim.probe "$@"\n'
+ACCESS_ROLES = ("jumphost", "ews")
+
+
+def setup_access(log, node):
+    """'otprobe' als gewoon commando op elke node; op de jump host en de EWS
+    ook het contractor-account met SSH-wachtwoordlogin (pad van Remco)."""
+    script = ["set -e",
+              f"printf %s {shlex.quote(OTPROBE_WRAPPER)} > /usr/local/bin/otprobe",
+              "chmod 755 /usr/local/bin/otprobe"]
+    if node["role"] in ACCESS_ROLES:
+        user, pw = contractor_credentials()
+        log(f"  account '{user}' op {node['hostname']} (SSH)")
+        script += [f"id -u {user} >/dev/null 2>&1 || useradd -m -s /bin/bash -c 'Contractor (lab)' {user}",
+                   f"echo {shlex.quote(f'{user}:{pw}')} | chpasswd",
+                   "mkdir -p /etc/ssh/sshd_config.d",
+                   "printf 'PasswordAuthentication yes\\n' > /etc/ssh/sshd_config.d/otlab.conf",
+                   "systemctl enable ssh >/dev/null 2>&1",
+                   "systemctl restart ssh"]
+    host().pct_exec(node["vmid"], "; ".join(script), check=True)
+
+
+# Webinterfaces die het kijkvenster in de controller kan tonen.
+def view_port(node: dict) -> int | None:
+    role = node.get("role")
+    if role == "hmi":
+        return 80
+    if role == "historian":
+        return 8080
+    if role == "webservice":
+        return int(node.get("args", {}).get("port", 80))
+    return None
+
+
+def fetch_view(node: dict, path: str = "/") -> str:
+    """Haal een webpagina op ín de container zelf (via Proxmox, niet via de
+    FortiGate): de kandidaat kijkt mee zonder dat er een gat in de firewall komt."""
+    port = view_port(node)
+    url = f"http://127.0.0.1:{port}{path}"
+    rc, out = host().pct_exec(node["vmid"], f"curl -s -m 5 {shlex.quote(url)}", timeout=20)
+    if rc != 0:
+        raise RuntimeError(f"{node['hostname']} gaf geen antwoord op poort {port} (curl rc={rc})")
+    return out
 
 
 def update_simulators(log):
@@ -377,6 +421,7 @@ def update_simulators(log):
             push_otsim(log, node["vmid"])
             if node["kind"] == "device":
                 host().pct_exec(node["vmid"], "systemctl restart otsim")
+            setup_access(log, node)
     update_state(otsim_tree=updates.otsim_tree())
 
 

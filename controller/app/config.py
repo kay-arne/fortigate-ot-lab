@@ -4,6 +4,8 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import secrets
+import string
 import threading
 from pathlib import Path
 
@@ -72,6 +74,20 @@ def update_state(**changes) -> dict:
         tmp.write_text(json.dumps(state, indent=2))
         tmp.replace(STATE_FILE)
         return state
+
+
+# Account van de contractor (Remco in de lab guide) op de jump host en de EWS.
+CONTRACTOR_USER = "remco"
+
+
+def contractor_credentials() -> tuple[str, str]:
+    """Gebruiker en wachtwoord voor SSH via de FortiGate-VIP; het wachtwoord
+    wordt één keer gegenereerd en staat (leesbaar, het is een lab) in de UI."""
+    pw = get_state().get("contractor_password")
+    if not pw:
+        pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+        update_state(contractor_password=pw)
+    return CONTRACTOR_USER, pw
 
 
 def segment_map(topo: dict) -> dict:

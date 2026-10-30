@@ -222,6 +222,13 @@
 
   <!-- TESTS -->
   <section id="tab-tests" class="tab">
+    <div class="card">
+      <h2>Zo kom je in het lab</h2>
+      <p class="help">Jij zit, net als deze controller, buiten de OT-omgeving: de enige weg naar binnen is de FortiGate.
+        Er zijn drie ingangen. Alleen het pad van de contractor gaat ook echt dóór de FortiGate. De tests en het kijkvenster
+        lopen via Proxmox buitenom, alsof je achter dat device zit.</p>
+      <div id="access" class="access"></div>
+    </div>
     <div class="toolbar">
       <button id="btn-runall" class="primary">Alle tests draaien</button>
     </div>
@@ -274,6 +281,13 @@
   <pre id="log-body"></pre>
 </aside>
 
+<div id="viewer" class="modal" hidden>
+  <div class="modal-box">
+    <div class="card-head"><h2 id="viewer-title">-</h2>
+      <div class="row"><span id="viewer-status" class="hint"></span><button id="viewer-close" class="ghost">Sluiten</button></div></div>
+    <iframe id="viewer-frame" sandbox title="Webinterface van het device"></iframe>
+  </div>
+</div>
 <script src="/static/app.js"></script>
 </body>
 </html>

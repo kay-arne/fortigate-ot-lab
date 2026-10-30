@@ -150,3 +150,20 @@ button:disabled { opacity: .45; cursor: not-allowed; filter: none; }
 [data-comp].selected { outline: 2px solid #3b9cff; outline-offset: -1px; }
 .segsel { display: flex; align-items: center; gap: 6px; margin: 0; cursor: pointer; }
 .segsel input { width: auto !important; display: inline !important; margin: 0; }
+
+/* --- toegang & kijkvenster ---------------------------------------------- */
+.access { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.acc { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.acc h3 { margin: 0 0 6px; font-size: 15px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.acc p { margin: 0 0 8px; color: #b7c3cd; }
+.acc table.kv { width: 100%; table-layout: fixed; }
+.acc table.kv th { width: 92px; }
+.acc table.kv td { overflow-wrap: anywhere; }
+.acc table.kv .secret { display: flex; width: 100%; max-width: 240px; margin-top: 4px; }
+.modal { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.modal[hidden] { display: none; }
+.modal-box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; width: min(1000px, 100%); height: min(720px, 100%); display: flex; flex-direction: column; gap: 10px; }
+.modal-box iframe { flex: 1; width: 100%; border: 1px solid var(--line); border-radius: 6px; background: #1b222a; }
+.modal-box .card-head h2 { white-space: nowrap; }
+.modal-box .card-head .row { flex-wrap: nowrap; min-width: 0; }
+#viewer-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

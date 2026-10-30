@@ -44,8 +44,49 @@ dat ontwerp op de proef gesteld.
    policy of signature ingreep.
 5. **Les**: koppel het aan IEC 62443 en aan de praktijk.
 
-> Ad-hoc commando's voer je uit onderaan het Testcenter: kies een node en typ een
-> `otprobe`-commando, zoals `modbus-read 10.10.0.10 0 4`.
+## Zo werk je in dit lab
+
+Als kandidaat zit je, net als de controller, op het gewone netwerk (L4/L5). De enige
+weg naar de fabriek loopt via de FortiGate, en daar staat terecht geen regel die
+het kantoornetwerk bij de PLC's laat. Je werkt daarom via drie ingangen. Alle
+gegevens staan bovenaan het **Testcenter**, onder *Zo kom je in het lab*.
+
+```
+                         jouw laptop (L4/L5)
+              ┌──────────────┼───────────────────────┐
+              │ (1) HTTPS     │ (2) SSH :2222          │ (3) web UI controller
+              ▼               ▼                        ▼
+         FortiGate-GUI    FortiGate (VIP)          controller ──► Proxmox
+          logs, policies      │                                    │ pct exec
+                              ▼                                    ▼
+                        dmz-jump (L3.5)                    ín elk device
+                              │ SSH                     (tests, ad-hoc, kijkvenster)
+                              ▼
+                           ews (L2) ──► PLC's (L1)
+```
+
+| Ingang | Rol | Gaat door de FortiGate? | Wat doe je ermee |
+|---|---|---|---|
+| **1. FortiGate-GUI** (`https://<WAN-IP>`) | Mark / security-team | ja, als beheerverkeer | logs, policies en assets bekijken: *wat gebeurde er?* |
+| **2. Jump host** (`ssh -p 2222 remco@<WAN-IP>`) | Remco / contractor | ja, elke hop | echte remote access: jump host, dan door naar de EWS |
+| **3. Controller** (Testcenter en kijkvenster) | iedereen "op de vloer" | nee, via Proxmox buitenom | in de huid kruipen van een device en vanaf dáár verkeer maken |
+
+**Ingang 3 is de belangrijkste.** Kies je in het Testcenter een test "vanaf
+`probe-ops`", dan voert de controller het commando uit ín die container in L3,
+via Proxmox en niet via het netwerk. Het verkeer dat dat commando maakt, gaat vanaf
+daar wél door de FortiGate. Zo speel je de historian-server, de HMI of de laptop
+van Ghost zonder dat er een gat in de firewall nodig is.
+
+- **Testcenter**: de voorbereide tests, met per test de verwachting, de uitkomst en
+  de FortiGate-logregels die erbij horen.
+- **Ad-hoc test**: kies een device en typ een `otprobe`-commando, zoals
+  `modbus-read 10.10.0.10 0 4`.
+- **Kijkvenster**: knoppen voor de HMI, historian, MES en de DMZ-servers. De
+  controller haalt de pagina op in het device zelf en ververst hem elke 5 seconden.
+  Het venster is alleen-lezen.
+
+Het contractor-account (`remco`) bestaat alleen op de jump host en de EWS. Het
+wachtwoord wordt één keer gegenereerd en staat in het Testcenter.
 
 ---
 
@@ -58,9 +99,10 @@ mensen niks te doen."*
 **Actie**
 - Open de Lab-tab en loop de Purdue-lagen van boven naar beneden langs: van jouw
   IT-netwerk via de FortiGate naar L3.5 tot en met L0.
-- Lees het procesbeeld uit vanuit de supervisory-laag (ad-hoc, node `probe-sup`):
-  - `http http://10.20.0.10/`: de SCADA HMI met live tankniveau en setpoints.
-- Lees de tank-PLC direct uit (ad-hoc, node `ews`):
+- Open in het Testcenter het kijkvenster **SCADA HMI**: live tankniveau, setpoint
+  en de transportband. Laat het open staan; je ziet de tank vullen en leeglopen.
+- Open ook de **historian**: die verzamelt dezelfde data, maar dan een laag hoger.
+- Lees de tank-PLC direct uit (ad-hoc, device `ews`):
   - `modbus-read 10.10.0.10 0 4`: HR0 niveau, HR1 setpoint, HR2 pomp aan/uit.
 
 **Les**
@@ -115,14 +157,20 @@ bron-IP, doel en poort, afgehandeld door de implicit deny.
 *23:40. De transportband hapert. Remco, de integrator, moet op afstand meekijken.
 Vroeger had hij een TeamViewer-sessie rechtstreeks op de EWS.*
 
-**Actie** (Testcenter)
-- **Remote access via DMZ jump host** (`remote-access`): SSH naar `dmz-jump`.
-  Van buiten gaat dat via het WAN-IP van de FortiGate op poort 2222 (VIP).
-- **DMZ-host probeert L1 direct te bereiken** (`dmz-bypass`).
+**Actie**: dit hoofdstuk doe je echt, vanaf je eigen laptop (ingang 2).
+1. Log in als Remco: `ssh -p 2222 remco@<WAN-IP>`. Je komt uit op `dmz-jump` (10.35.0.10).
+2. Probeer vanaf de jump host direct een PLC: `otprobe modbus-read 10.10.0.10 0 4`.
+3. Ga door naar de EWS: `ssh remco@10.20.0.30`.
+4. Lees vanaf de EWS de S7-menger uit: `otprobe s7-read 10.10.0.20`.
+5. Ter controle in het Testcenter: **Remote access via DMZ jump host**
+   (`remote-access`) en **DMZ-host probeert L1 direct te bereiken** (`dmz-bypass`).
 
 **Onthulling**
-Remco komt op de jump host, en vanaf daar alleen verder naar de EWS (SSH) en het
-MES. Een rechtstreekse doorsteek van de DMZ naar de PLC's wordt geblokkeerd.
+- Stap 1 gaat door de VIP (WAN :2222 naar 22), stap 3 door de conduit "DMZ jump → L2 EWS".
+- Stap 2 wordt geblokkeerd: de DMZ heeft geen conduit naar L1.
+- Stap 4 lukt, omdat de EWS het engineering-conduit heeft.
+- In de forward traffic-log van de FortiGate staat elke hop als aparte sessie,
+  zodat je precies ziet welke route Remco nam.
 
 **Les**
 - De DMZ (L3.5) *termineert* verbindingen: niets loopt in één keer van buiten naar binnen.
