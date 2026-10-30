@@ -272,6 +272,9 @@ de doorgelaten en geblokkeerde Industrial-applicaties.
   `OT-readonly` om naar `OT-monitor`. Ghost schrijft vanaf L3 setpoint 999 naar de
   tank-PLC, en de pomp blijft draaien. Binnen een minuut toont de HMI
   **ALARM: TANK LOOPT OVER**.
+
+![SCADA HMI tijdens "Breek het": de tank-PLC staat op 97% en de HMI slaat alarm](img/04-breek-het.jpg)
+
 - Na 60 seconden zet de controller de policy terug en het setpoint via de HMI op 50.
   Draai daarna **L3 schrijft een Modbus-setpoint** (`l3-modbus-write`) nog eens:
   die is weer geblokkeerd.
