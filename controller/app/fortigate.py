@@ -21,10 +21,11 @@ from .config import get_state, inventory, netmask, segment_map, update_state, vm
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 API_USER = "otlab-controller"
-# Tijdelijk admin-wachtwoord voor de eerste boot: zonder speciale tekens, zodat
-# het ongeschonden door cloud-init en de FortiOS-CLI komt. Tijdens de
+# Tijdelijk admin-wachtwoord voor de eerste boot: voldoet aan complexiteitseisen
+# (hoofd-/kleine letter, cijfer, speciaal teken, >= 12 tekens) maar bevat geen
+# tekens die in cloud-init of de FortiOS-CLI quoting nodig hebben. Tijdens de
 # provisioning vervangt de controller het door het wachtwoord uit de UI.
-BOOTSTRAP_PASSWORD = "DeploymentPassword"
+BOOTSTRAP_PASSWORD = "Deployment_Pass2026"
 
 
 # --------------------------------------------------------------------------
@@ -160,16 +161,28 @@ def _ssh_connect(topo, passwords: list[str] | None = None) -> paramiko.SSHClient
     raise err or paramiko.AuthenticationException("geen admin-wachtwoord bekend")
 
 
-def wait_for_ssh(log, topo, timeout=600):
+def wait_for_ssh(log, topo, timeout=900):
     """Wacht tot admin kan inloggen. Vlak na de eerste boot (logdisk formatteren,
-    FortiFlex-activatie) herstart de FortiGate nog; dan weigert SSH tijdelijk."""
+    FortiFlex-activatie) herstart de FortiGate nog; dan weigert SSH tijdelijk.
+    Per ronde maar één wachtwoord proberen en na een geweigerde login ruim een
+    minuut wachten: FortiOS blokkeert het IP na 3 mislukte logins (60 s)."""
     deadline = time.time() + timeout
     last = None
+    attempt = 0
     while time.time() < deadline:
+        candidates = _admin_passwords()
+        pw = candidates[attempt % len(candidates)]
+        label = "bootstrap-wachtwoord" if pw == BOOTSTRAP_PASSWORD else "ingesteld wachtwoord"
         try:
-            _ssh_connect(topo).close()
-            log("SSH-login als admin gelukt")
+            _ssh_connect(topo, [pw]).close()
+            if pw != BOOTSTRAP_PASSWORD:
+                update_state(fgt_password_applied=True)
+            log(f"SSH-login als admin gelukt ({label})")
             return
+        except paramiko.AuthenticationException:
+            attempt += 1
+            log(f"  SSH: {label} geweigerd; 65 s wachten (lockout voorkomen)...")
+            time.sleep(65)
         except (paramiko.SSHException, OSError) as e:
             if str(e) != last:
                 log(f"  SSH nog niet gelukt ({e}); opnieuw proberen...")
@@ -178,8 +191,7 @@ def wait_for_ssh(log, topo, timeout=600):
     raise RuntimeError(
         f"Kan niet als admin inloggen op de FortiGate (bootstrap-wachtwoord '{BOOTSTRAP_PASSWORD}' en het "
         "ingestelde wachtwoord geweigerd). Controleer via de Proxmox-console: log in als admin en draai "
-        "'diagnose debug cloudinit show' om te zien of de bootstrap-config is toegepast. Is de FortiGate "
-        "uitgerold met een oudere controllerversie, rol hem dan opnieuw uit.")
+        "'diagnose debug cloudinit show' om te zien of de bootstrap-config is toegepast.")
 
 
 def ssh_cli(topo, commands: list[str], wait=2.0) -> str:
