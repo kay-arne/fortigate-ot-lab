@@ -340,8 +340,11 @@ async function loadAccess() {
       <p>Het pad van Remco: SSH via de VIP naar de jump host in de DMZ, en van daar alleen naar de EWS.</p>
       <table class="kv"><tr><th>Jump host</th><td><code>ssh -p ${a.jump_port} ${esc(a.user)}@${wan}</code></td></tr>
         <tr><th>Daarna EWS</th><td><code>ssh ${esc(a.user)}@${esc(a.ews_ip)}</code></td></tr>
-        <tr><th>Wachtwoord</th><td>${secretRow("acc-pw", a.password)}</td></tr></table>
-      <p class="hint">Op beide machines staat <code>otprobe</code>, bijv. <code>otprobe s7-read 10.10.0.20</code>.</p></div>
+        <tr><th>Wachtwoord</th><td>${secretRow("acc-pw", a.password)}</td></tr>
+        <tr><th>MFA-code</th><td><span class="mono" id="acc-totp">${esc(a.totp_code)}</span>
+          <span class="hint">alleen jump host; of zet geheim <span class="mono">${esc(a.totp_secret)}</span> in een authenticator-app</span></td></tr></table>
+      <p class="hint">Op beide machines staat <code>otprobe</code>, bijv. <code>otprobe s7-read 10.10.0.20</code>.</p>
+      <div class="row"><button class="ghost" id="btn-recordings">Sessie-opnames jump host</button></div></div>
     <div class="acc"><h3>3. Op de vloer <span class="tag">via Proxmox</span></h3>
       <p>Tests en ad-hoc commando's draaien ín het gekozen device. Het kijkvenster toont de webinterface van een device,
         zonder gat in de firewall.</p>
@@ -351,13 +354,20 @@ async function loadAccess() {
     input.type = input.type === "password" ? "text" : "password";
     b.classList.toggle("open", input.type === "text");
   }));
-  $$("#access [data-view]").forEach((b) => (b.onclick = () => openViewer(b.dataset.view, b.textContent)));
+  $$("#access [data-view]").forEach((b) => (b.onclick = () => openViewer(`/api/view/${encodeURIComponent(b.dataset.view)}`, b.textContent)));
+  $("#btn-recordings").onclick = () => openViewer("/api/recordings", "Sessie-opnames jump host");
+  clearInterval(totpTimer);
+  totpTimer = setInterval(async () => {
+    if (!$("#acc-totp")) return clearInterval(totpTimer);
+    try { $("#acc-totp").textContent = (await api("/api/access")).totp_code; } catch (e) { /* volgende ronde */ }
+  }, 10000);
 }
+let totpTimer = null;
 
 let viewerTimer = null;
-async function refreshViewer(name) {
+async function refreshViewer(path) {
   try {
-    const r = await fetch(`/api/view/${encodeURIComponent(name)}`, { credentials: "same-origin" });
+    const r = await fetch(path, { credentials: "same-origin" });
     if (r.status === 401) { location.href = "/login"; return; }
     const body = await r.text();
     if (!r.ok) throw new Error((JSON.parse(body).detail) || r.statusText);
@@ -365,13 +375,13 @@ async function refreshViewer(name) {
     $("#viewer-status").textContent = "bijgewerkt " + new Date().toLocaleTimeString("nl-NL");
   } catch (e) { $("#viewer-status").textContent = "fout: " + e.message; }
 }
-function openViewer(name, title) {
+function openViewer(path, title) {
   $("#viewer-title").textContent = title;
   $("#viewer-frame").srcdoc = "";
   $("#viewer").hidden = false;
-  refreshViewer(name);
+  refreshViewer(path);
   clearInterval(viewerTimer);
-  viewerTimer = setInterval(() => refreshViewer(name), 5000);
+  viewerTimer = setInterval(() => refreshViewer(path), 5000);
 }
 $("#viewer-close").onclick = () => { $("#viewer").hidden = true; clearInterval(viewerTimer); };
 $("#btn-adhoc").onclick = () => action("/api/adhoc", { node: $("#adhoc-node").value, command: $("#adhoc-cmd").value });

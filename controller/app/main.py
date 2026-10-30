@@ -1,7 +1,9 @@
 """Web UI en API van de OT Lab controller."""
+import html
 import ipaddress
 import json
 import re
+from urllib.parse import quote
 from pathlib import Path
 from typing import Optional
 
@@ -14,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import auth, deployer, fortigate, jobs, scenarios, updates
-from .config import (DATA, HOST_FILE, UPLOADS, contractor_credentials, get_state, inventory, load_host, load_topology,
+from .config import (DATA, HOST_FILE, UPLOADS, contractor_credentials, contractor_totp_secret, get_state, totp, inventory, load_host, load_topology,
                      template_vmid, update_state)
 from .hostctl import host
 
@@ -435,7 +437,10 @@ def access():
     except RuntimeError:
         wan_ip, fgt_url = "", ""
     jump, ews = nodes.get("dmz-jump"), nodes.get("ews")
+    secret = contractor_totp_secret()
     return {
+        "totp_secret": secret, "totp_code": totp(secret),
+        "totp_uri": f"otpauth://totp/{quote(f'OT Lab:{user}')}?secret={secret}&issuer={quote('OT Lab')}",
         "fgt_url": fgt_url, "fgt_user": "admin", "fgt_password": get_state().get("fgt_admin_password") or "",
         "wan_ip": wan_ip, "jump_port": 2222, "user": user, "password": pw,
         "jump_ip": jump["ip"] if jump else "", "ews_ip": ews["ip"] if ews else "",
@@ -463,6 +468,24 @@ def view(name: str, path: str = "/"):
         raise HTTPException(502, str(e))
     # de UI ververst zelf; een meta-refresh zou het venster laten verspringen
     return HTMLResponse(META_REFRESH.sub("", html), headers=NO_CACHE)
+
+
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
+
+
+@app.get("/api/recordings")
+def recordings():
+    """Opgenomen SSH-sessies van de contractor op de jump host, als pagina voor het kijkvenster."""
+    jump = next((n for n in inventory(load_topology()) if n["role"] == "jumphost"), None)
+    if not jump:
+        raise HTTPException(404, "geen jump host")
+    sessions = deployer.recordings(jump)
+    body = "".join(f"<h3>{html.escape(s['name'])}</h3><pre>{html.escape(ANSI.sub('', s['text']))}</pre>"
+                   for s in sessions) or "<p>Nog geen opgenomen sessies.</p>"
+    page = ("<!doctype html><meta charset=utf-8><style>body{font-family:sans-serif;background:#1b222a;color:#e6e6e6;"
+            "margin:20px}h3{color:#f0a030;font-size:14px}pre{background:#0f1418;padding:10px;white-space:pre-wrap}</style>"
+            f"<h1 style='color:#f0a030'>Sessie-opnames jump host</h1>{body}")
+    return HTMLResponse(page, headers=NO_CACHE)
 
 
 class Adhoc(BaseModel):

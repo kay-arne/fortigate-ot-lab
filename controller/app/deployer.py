@@ -14,7 +14,7 @@ from email.mime.text import MIMEText
 from pathlib import Path
 
 from . import fortigate, updates
-from .config import (ROOT, UPLOADS, contractor_credentials, get_state, inventory, load_host, load_topology,
+from .config import (ROOT, UPLOADS, contractor_credentials, contractor_totp_secret, get_state, inventory, load_host, load_topology,
                      prefixlen, segment_map, template_vmid, update_state,
                      uplink_tag, vm_name)
 from .hostctl import HostError, host
@@ -434,11 +434,88 @@ def deploy_node(log, topo, node):
 
 OTPROBE_WRAPPER = '#!/bin/sh\ncd /opt/otsim && exec /opt/otsim/venv/bin/python -m otsim.probe "$@"\n'
 ACCESS_ROLES = ("jumphost", "ews")
+SESSION_DIR = "/var/log/otlab-sessions"
+
+# Op de jump host loopt elke shell van de contractor via 'script': de sessie
+# wordt opgenomen, ook als er een commando wordt meegegeven (ssh host cmd).
+SESSION_WRAPPER = f"""#!/bin/sh
+f="{SESSION_DIR}/$(date +%Y%m%d-%H%M%S)-$USER-${{SSH_CLIENT%% *}}.log"
+exec script -q -f -c "${{SSH_ORIGINAL_COMMAND:-bash -l}}" "$f"
+"""
+
+# Wachtwoord én TOTP-code (keyboard-interactive via PAM), opname en geen
+# TCP-forwarding: elke hop vanaf de jump host loopt via de opgenomen shell.
+JUMP_SSHD = """PasswordAuthentication yes
+KbdInteractiveAuthentication yes
+UsePAM yes
+Match User {user}
+    AuthenticationMethods keyboard-interactive
+    ForceCommand /usr/local/bin/otlab-session
+    AllowTcpForwarding no
+    X11Forwarding no
+"""
+PAM_TOTP = "auth required pam_google_authenticator.so nullok"
+
+
+def push_debs(log, node, packages: list[str]):
+    """Debian-pakketten via de controller (ook Debian 12) in een container zetten;
+    de OT-segmenten en de DMZ-hosts hebben geen internet."""
+    h = host()
+    tmp = Path(tempfile.mkdtemp(prefix="debs-"))
+    dl = subprocess.run(["apt-get", "download", *packages], cwd=tmp, capture_output=True, text=True)
+    if dl.returncode != 0:
+        raise RuntimeError(f"apt-get download {' '.join(packages)} mislukt: {dl.stderr.strip()[-200:]}")
+    tgz = tmp / "debs.tgz"
+    with tarfile.open(tgz, "w:gz") as tar:
+        for deb in tmp.glob("*.deb"):
+            tar.add(deb, arcname=deb.name)
+    h.put(tgz, f"{h.workdir}/debs.tgz")
+    h.run(["pct", "push", str(node["vmid"]), f"{h.workdir}/debs.tgz", "/tmp/debs.tgz"])
+    h.pct_exec(node["vmid"], "rm -rf /tmp/debs && mkdir /tmp/debs && tar xzf /tmp/debs.tgz -C /tmp/debs "
+                             "&& dpkg -i /tmp/debs/*.deb >/dev/null", check=True)
+    log(f"  {node['hostname']}: {' '.join(packages)} geïnstalleerd")
+
+
+def setup_jump_mfa(log, node, user: str):
+    """MFA (wachtwoord + TOTP) en sessie-opname voor de contractor op de jump host."""
+    h = host()
+    rc, _ = h.pct_exec(node["vmid"], "ls /lib/*/security/pam_google_authenticator.so")
+    if rc != 0:
+        push_debs(log, node, ["libpam-google-authenticator", "libqrencode4"])
+    ga = f"{contractor_totp_secret()}\n\" RATE_LIMIT 10 30\n\" WINDOW_SIZE 3\n\" TOTP_AUTH\n"
+    script = ["set -e",
+              f"printf '{ga}' > /home/{user}/.google_authenticator",
+              f"chown {user}: /home/{user}/.google_authenticator",
+              f"chmod 400 /home/{user}/.google_authenticator",
+              f"grep -q pam_google_authenticator /etc/pam.d/sshd || "
+              f"sed -i '/^@include common-auth/a {PAM_TOTP}' /etc/pam.d/sshd",
+              f"install -d -m 1733 {SESSION_DIR}",
+              f"printf %s {shlex.quote(SESSION_WRAPPER)} > /usr/local/bin/otlab-session",
+              "chmod 755 /usr/local/bin/otlab-session",
+              f"printf %s {shlex.quote(JUMP_SSHD.format(user=user))} > /etc/ssh/sshd_config.d/otlab.conf",
+              "systemctl restart ssh"]
+    h.pct_exec(node["vmid"], "; ".join(script), check=True)
+    log(f"  {node['hostname']}: MFA (TOTP) en sessie-opname voor '{user}'")
+
+
+def recordings(node, count=5) -> list[dict]:
+    """De laatste opgenomen sessies op de jump host, nieuwste eerst."""
+    rc, out = host().pct_exec(node["vmid"], f"cd {SESSION_DIR} 2>/dev/null && for f in $(ls -1t | head -{count}); "
+                                            f"do echo \"=== $f\"; tail -c 20000 \"$f\"; done")
+    sessions, cur = [], None
+    for line in out.splitlines():
+        if line.startswith("=== "):
+            cur = {"name": line[4:], "text": []}
+            sessions.append(cur)
+        elif cur is not None:
+            cur["text"].append(line)
+    return [{"name": s["name"], "text": "\n".join(s["text"])} for s in sessions]
 
 
 def setup_access(log, node):
     """'otprobe' als gewoon commando op elke node; op de jump host en de EWS
-    ook het contractor-account met SSH-wachtwoordlogin (pad van Remco)."""
+    ook het contractor-account met SSH-wachtwoordlogin (pad van Remco). Op de
+    jump host komen daar MFA en sessie-opname bij."""
     script = ["set -e",
               f"printf %s {shlex.quote(OTPROBE_WRAPPER)} > /usr/local/bin/otprobe",
               "chmod 755 /usr/local/bin/otprobe"]
@@ -452,6 +529,8 @@ def setup_access(log, node):
                    "systemctl enable ssh >/dev/null 2>&1",
                    "systemctl restart ssh"]
     host().pct_exec(node["vmid"], "; ".join(script), check=True)
+    if node["role"] == "jumphost":
+        setup_jump_mfa(log, node, contractor_credentials()[0])
 
 
 # Webinterfaces die het kijkvenster in de controller kan tonen.

@@ -71,13 +71,22 @@ scenarios:
   # --- Remote access via de DMZ (hoofdstuk 3) ----------------------------
   - id: contractor-login
     group: Remote access
-    title: "Remco logt in via de VIP op de WAN-poort"
+    title: "Remco logt in via de VIP, met wachtwoord en MFA-code"
     from: controller
     check: contractor-login
-    run: "ssh -p 2222 remco@<WAN-IP>"
+    run: "ssh -p 2222 remco@<WAN-IP>  (wachtwoord + TOTP)"
     expect: allowed
-    why: "Eén ingang van buiten: de VIP naar de jump host, met een eigen account."
+    why: "Eén ingang van buiten: de VIP naar de jump host, met een eigen account en een tweede factor."
     logs: [traffic/forward]
+
+  - id: contractor-no-mfa
+    group: Remote access
+    title: "Gestolen wachtwoord zonder MFA-code"
+    from: controller
+    check: contractor-no-mfa
+    run: "ssh -p 2222 remco@<WAN-IP>  (goed wachtwoord, foute code)"
+    expect: blocked
+    why: "Een uitgelekt wachtwoord alleen is niet genoeg: de jump host vraagt ook de TOTP-code."
 
   - id: jump-to-ews
     group: Remote access

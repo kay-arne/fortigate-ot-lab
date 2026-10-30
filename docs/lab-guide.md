@@ -68,7 +68,7 @@ gegevens staan bovenaan het **Testcenter**, onder *Zo kom je in het lab*.
 | Ingang | Rol | Gaat door de FortiGate? | Wat doe je ermee |
 |---|---|---|---|
 | **1. FortiGate-GUI** (`https://<WAN-IP>`) | Mark / security-team | ja, als beheerverkeer | logs, policies en assets bekijken: *wat gebeurde er?* |
-| **2. Jump host** (`ssh -p 2222 remco@<WAN-IP>`) | Remco / contractor | ja, elke hop | echte remote access: jump host, dan door naar de EWS |
+| **2. Jump host** (`ssh -p 2222 remco@<WAN-IP>`) | Remco / contractor | ja, elke hop | echte remote access met MFA: jump host, dan door naar de EWS |
 | **3. Controller** (Testcenter en kijkvenster) | iedereen "op de vloer" | nee, via Proxmox buitenom | in de huid kruipen van een device en vanaf dáár verkeer maken |
 
 **Ingang 3 is de belangrijkste.** Kies je in het Testcenter een test "vanaf
@@ -86,7 +86,9 @@ van Ghost zonder dat er een gat in de firewall nodig is.
   Het venster is alleen-lezen.
 
 Het contractor-account (`remco`) bestaat alleen op de jump host en de EWS. Het
-wachtwoord wordt één keer gegenereerd en staat in het Testcenter.
+wachtwoord wordt één keer gegenereerd en staat in het Testcenter. De jump host
+vraagt daarna een **MFA-code** (TOTP). Het Testcenter toont de actuele code en het
+geheim, zodat je het ook in een authenticator-app kunt zetten.
 
 ![Testcenter: de drie ingangen met URL's, logins en het kijkvenster](img/01-toegang.jpg)
 
@@ -199,13 +201,19 @@ bron-IP, doel en poort, afgehandeld door de implicit deny. Let op de kolom
 Vroeger had hij een TeamViewer-sessie rechtstreeks op de EWS.*
 
 **Actie**: dit hoofdstuk doe je echt, vanaf je eigen laptop (ingang 2).
-1. Log in als Remco: `ssh -p 2222 remco@<WAN-IP>`. Je komt uit op `dmz-jump` (10.35.0.10).
+1. Log in als Remco: `ssh -p 2222 remco@<WAN-IP>`. Na het wachtwoord vraagt de
+   jump host een *Verification code*: de MFA-code uit het Testcenter of je
+   authenticator-app. Je komt uit op `dmz-jump` (10.35.0.10).
 2. Probeer vanaf de jump host direct een PLC: `otprobe modbus-read 10.10.0.10 0 4`.
 3. Ga door naar de EWS: `ssh remco@10.20.0.30`.
 4. Lees vanaf de EWS de S7-menger uit: `otprobe s7-read 10.10.0.20`.
-5. Ter controle in het Testcenter, groep *Remote access*:
-   - **Remco logt in via de VIP op de WAN-poort** (`contractor-login`): de
-     controller logt zelf in zoals jij in stap 1;
+5. Open in het Testcenter **Sessie-opnames jump host**: je eigen sessie staat erin,
+   inclusief de geblokkeerde poging uit stap 2 en de hop naar de EWS.
+6. Ter controle in het Testcenter, groep *Remote access*:
+   - **Remco logt in via de VIP, met wachtwoord en MFA-code** (`contractor-login`):
+     de controller logt zelf in zoals jij in stap 1;
+   - **Gestolen wachtwoord zonder MFA-code** (`contractor-no-mfa`): het goede
+     wachtwoord met een foute code komt er niet in;
    - **Jump host naar de engineering workstation** (`jump-to-ews`): stap 3;
    - **Jump host probeert direct een PLC** (`jump-to-plc`): stap 2.
 
@@ -219,7 +227,13 @@ Vroeger had hij een TeamViewer-sessie rechtstreeks op de EWS.*
 **Les**
 - De DMZ (L3.5) *termineert* verbindingen: niets loopt in één keer van buiten naar binnen.
 - Remote access loopt via één punt dat je kunt bewaken, en daarna via vaste conduits.
-- Verdieping: zet er MFA en sessie-opname op de jump host bij. Die zitten niet in dit lab.
+- Dat ene punt krijgt extra bewaking: een tweede factor tegen gestolen wachtwoorden,
+  en een opname van alles wat de contractor doet. TCP-forwarding staat op de jump
+  host uit, zodat elke hop door de opgenomen shell gaat.
+- In de praktijk doe je dit met FortiAuthenticator of FortiToken, en een
+  PAM-oplossing (zoals FortiPAM) voor de opnames. Het principe is hetzelfde.
+- IEC 62443: FR1 *identification and authentication control* (MFA voor toegang
+  van buiten, SR 1.1 RE 2) en FR6 (audit van de sessie).
 
 ## Hoofdstuk 4: Zelfde poort, andere bedoeling
 
@@ -406,7 +420,7 @@ wil voor het managementoverleg één overzicht.*
 |---|---|---|
 | 1 | OT-protocollen zichtbaar, assets per Purdue-laag | FR6 |
 | 2 | Geen pad van IT naar OT, verkenning gelogd | FR5 |
-| 3 | Remote access via één gecontroleerd punt | FR1, FR5 |
+| 3 | Remote access via één gecontroleerd punt, met MFA en sessie-opname | FR1, FR5, FR6 |
 | 4 | Lezen ja, schrijven nee op dezelfde poort | FR2, FR3 |
 | 5 | Engineering-acties alleen vanaf de EWS | FR2 |
 | 6 | Geen lateral movement tussen lagen, geen uitbraak naar internet | FR5 |
@@ -416,8 +430,9 @@ wil voor het managementoverleg één overzicht.*
 
 ## Uitbreidingen (nog niet in het lab)
 
-- **MFA en sessie-opname op de jump host** (hoofdstuk 3), bijvoorbeeld met
-  FortiAuthenticator of FortiPAM.
-- **Virtual patching op een OT-exploit** (hoofdstuk 7): zodra de FortiGuard-database
-  een Modbus- of S7-exploitsignature bevat die met één request af te laten gaan is,
-  kan `shellshock-mes` een OT-variant krijgen.
+- **Virtual patching op een OT-exploit** (hoofdstuk 7): de ICS-signatures in de
+  FortiGuard-database van dit lab zijn leverancierspecifiek (InduSoft, IGSS,
+  CitectSCADA, CoDeSys) en zitten op hun eigen protocollen of URL-paden. Voor
+  Modbus, S7 en OPC UA zijn er alleen policy-signatures. Een OT-variant van
+  `shellshock-mes` vraagt daarom een gesimuleerd device van zo'n leverancier, met
+  een request die exact op de signature past.

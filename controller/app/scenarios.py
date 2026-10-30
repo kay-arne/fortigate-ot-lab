@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import socket
 import threading
 import time
 from collections import defaultdict
@@ -12,8 +13,8 @@ import paramiko
 import yaml
 
 from . import deployer, fortigate
-from .config import (SCENARIO_FILE, contractor_credentials, get_state, inventory, load_topology, segment_map,
-                     update_state)
+from .config import (SCENARIO_FILE, contractor_credentials, contractor_totp_secret, get_state, inventory,
+                     load_topology, segment_map, totp, update_state)
 from .hostctl import host
 
 PROBE_CMD = "/opt/otsim/venv/bin/python -m otsim.probe"
@@ -152,22 +153,34 @@ def check_assets(log, topo) -> dict:
     return {"ok": not missing and not wrong, "detail": detail, "srcip": None}
 
 
-def check_contractor_login(log, topo) -> dict:
-    """Inloggen als de contractor via de VIP op de WAN-poort, zoals de kandidaat doet."""
+def check_contractor_login(log, topo, mfa=True) -> dict:
+    """Inloggen als de contractor via de VIP op de WAN-poort, zoals de kandidaat
+    doet: wachtwoord én TOTP-code, daarna een commando in de opgenomen shell.
+    Met mfa=False klopt het wachtwoord wel, maar de code niet."""
     user, pw = contractor_credentials()
     ip = fortigate.mgmt_ip(topo)
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    code = totp(contractor_totp_secret()) if mfa else "000000"
+
+    def answer(title, instructions, prompts):
+        return [code if "code" in p.lower() else pw for p, _ in prompts]
+
     try:
-        client.connect(ip, port=2222, username=user, password=pw, timeout=10,
-                       allow_agent=False, look_for_keys=False)
-        src = client.get_transport().sock.getsockname()[0]
-        _, out, _ = client.exec_command("hostname", timeout=10)
-        return {"ok": True, "detail": f"ingelogd als {user} op {out.read().decode().strip()}", "srcip": src}
+        sock = socket.create_connection((ip, 2222), timeout=10)
+    except OSError as e:
+        return {"ok": False, "detail": f"{ip}:2222 - {e}", "srcip": None}
+    transport = paramiko.Transport(sock)
+    try:
+        transport.start_client(timeout=10)
+        transport.auth_interactive(user, answer)
+        chan = transport.open_session(timeout=10)
+        chan.exec_command("hostname")
+        out = chan.makefile().read().decode(errors="replace").strip()
+        return {"ok": True, "detail": f"ingelogd als {user} (wachtwoord + TOTP) op {out}",
+                "srcip": sock.getsockname()[0]}
     except (paramiko.SSHException, OSError) as e:
         return {"ok": False, "detail": f"{ip}:2222 - {e}", "srcip": None}
     finally:
-        client.close()
+        transport.close()
 
 
 BREAK_POLICY = "L3->L1 Modbus read-only"
@@ -199,6 +212,7 @@ def check_break_readonly(log, topo) -> dict:
 
 
 CHECKS = {"assets": check_assets, "contractor-login": check_contractor_login,
+          "contractor-no-mfa": lambda log, topo: check_contractor_login(log, topo, mfa=False),
           "break-readonly": check_break_readonly}
 
 

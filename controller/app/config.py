@@ -1,12 +1,17 @@
 """Paden, topologie en persistente state van de controller."""
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import ipaddress
 import json
 import os
 import secrets
 import string
+import struct
 import threading
+import time
 from pathlib import Path
 
 import yaml
@@ -88,6 +93,23 @@ def contractor_credentials() -> tuple[str, str]:
         pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
         update_state(contractor_password=pw)
     return CONTRACTOR_USER, pw
+
+
+def contractor_totp_secret() -> str:
+    """TOTP-geheim (base32) voor de tweede factor van de contractor op de jump host."""
+    secret = get_state().get("contractor_totp")
+    if not secret:
+        secret = base64.b32encode(secrets.token_bytes(10)).decode()
+        update_state(contractor_totp=secret)
+    return secret
+
+
+def totp(secret: str, at: float | None = None) -> str:
+    """Huidige 6-cijferige code volgens RFC 6238 (30 s, SHA-1), zoals een authenticator-app."""
+    counter = int((at if at is not None else time.time()) // 30)
+    digest = hmac.new(base64.b32decode(secret), struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    return f"{(struct.unpack('>I', digest[offset:offset + 4])[0] & 0x7FFFFFFF) % 1_000_000:06d}"
 
 
 def segment_map(topo: dict) -> dict:
