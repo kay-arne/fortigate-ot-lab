@@ -30,6 +30,15 @@ BOOTSTRAP_PASSWORD = "Deployment_Pass2026"
 ADMIN_TIMEOUT = 480
 
 
+def purdue_level(seg) -> str:
+    """Purdue-level voor de segmentpoort. FortiOS 7.6 kent op interfaces geen
+    level 0, dus L0 valt in L1; het testsegment speelt IT (L4)."""
+    level = str(seg.get("purdue", ""))
+    if level in ("", "-"):
+        return "4"
+    return "1" if level == "0" else level
+
+
 # --------------------------------------------------------------------------
 # bootstrap (cloud-init user_data)
 # --------------------------------------------------------------------------
@@ -76,6 +85,7 @@ def bootstrap_config(topo, state) -> str:
             f"        set ip {seg['gateway']} {netmask(seg['subnet'])}",
             "        set allowaccess ping",
             "        set device-identification enable",
+            f"        set default-purdue-level {purdue_level(seg)}",
             "    next",
         ]
     lines.append("end")
@@ -466,18 +476,15 @@ def enable_ot_features(log, api, topo) -> str | None:
     # Purdue-level van assets volgt de poort waarop ze ontdekt worden.
     levels = []
     for seg in topo["segments"]:
-        level = seg.get("purdue", "")
-        level = "4" if level in ("", "-") else level  # testsegment = IT
-        for attempt in (level, "1") if level == "0" else (level,):  # L0 bestaat niet in elke release
-            try:
-                api.put(f"cmdb/system/interface/{seg['port']}", {"default-purdue-level": attempt})
-                got = api.get(f"cmdb/system/interface/{seg['port']}").get("results", [{}])
-                got = (got[0] if isinstance(got, list) and got else got or {}).get("default-purdue-level")
-                if got is not None and str(got) == attempt:
-                    levels.append(f"{seg['port']}=L{attempt}")
-                    break
-            except (RuntimeError, requests.RequestException):
-                continue
+        level = purdue_level(seg)
+        try:
+            api.put(f"cmdb/system/interface/{seg['port']}", {"default-purdue-level": level})
+            got = api.get(f"cmdb/system/interface/{seg['port']}").get("results", [{}])
+            got = (got[0] if isinstance(got, list) and got else got or {}).get("default-purdue-level")
+            if got is not None and str(got) == level:
+                levels.append(f"{seg['port']}=L{level}")
+        except (RuntimeError, requests.RequestException):
+            pass
     log(f"Purdue-levels: {', '.join(levels) if levels else 'niet ondersteund door deze FortiOS-versie'}")
 
     try:
