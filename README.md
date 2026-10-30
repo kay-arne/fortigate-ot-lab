@@ -30,14 +30,35 @@ Op de Proxmox host (als root):
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/kay-arne/fortigate-ot-lab/main/install.sh)"
 ```
 
-Vervang `kay-arne` (ook in `install.sh` bij `REPO_URL`). Optionele variabelen, bijvoorbeeld:
+Net als bij de Proxmox community scripts kies je eerst **Standaard** of **Geavanceerd**. In de
+geavanceerde modus vraagt de installer (whiptail-menu's met wat er op je host beschikbaar is):
+
+| Vraag | Default |
+|---|---|
+| Container ID, hostname, cores, RAM, disk | eerstvolgend vrij ID, `otlab-controller`, 2, 2048 MiB, 16 GB |
+| Storage voor de controller en voor het LXC-template | eerste actieve storage met `rootdir` / `vztmpl` |
+| Bridge en VLAN-tag van de controller | `vmbr0`, geen VLAN |
+| DHCP of statisch IP (+ gateway, DNS) | DHCP |
+| Poort van de web UI | 8080 |
+| Storage voor de FortiGate en de OT-containers | zelfde als de controller |
+| Bridge en VLAN van FortiGate port1 (WAN) | zelfde als de controller |
+| Netwerk tijdens de template-build (DHCP of tijdelijk IP) | DHCP |
+| VMID-reeks van het lab (100 ID's) | 9100–9199 |
+| IP waarop de controller de host via SSH bereikt | IP op de interface met de default route |
+
+Je krijgt een samenvatting en kunt nog aanpassen voordat er iets wordt aangemaakt.
+
+Onbeheerd installeren kan ook, met dezelfde keuzes als variabelen:
 
 ```bash
-CT_IP=192.168.1.240/24 CT_GW=192.168.1.1 CT_STORAGE=local-zfs bash -c "$(curl -fsSL https://raw.githubusercontent.com/kay-arne/fortigate-ot-lab/main/install.sh)"
+OTLAB_UNATTENDED=1 CT_BRIDGE=vmbr1 CT_VLAN=40 CT_IP=10.40.0.240/24 CT_GW=10.40.0.1 CT_STORAGE=local-zfs \
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/kay-arne/fortigate-ot-lab/main/install.sh)"
 ```
 
+Zie de kop van [install.sh](install.sh) voor alle variabelen.
+
 De installer:
-1. maakt de controller-LXC (VMID 9099) op `vmbr0`;
+1. maakt de controller-LXC op de gekozen storage, bridge en VLAN;
 2. installeert de controller (FastAPI) als systemd service;
 3. koppelt de controller aan de host met een SSH-sleutel die alleen vanaf het controller-IP geldig is;
 4. print de URL en het login-wachtwoord van de web UI.
@@ -104,4 +125,4 @@ met een echte FortiGate-VM gedraaid**. Controleer bij de eerste uitrol vooral:
 ## Afbreken
 
 **Lab → Afbreken…** verwijdert VM's en containers, en optioneel het template en de bridges.
-De controller-LXC verwijder je zelf met `pct destroy 9099`.
+De controller-LXC verwijder je zelf met `pct destroy <id>`.

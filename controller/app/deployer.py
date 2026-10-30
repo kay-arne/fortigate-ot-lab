@@ -11,7 +11,8 @@ from pathlib import Path
 
 from . import fortigate
 from .config import (ROOT, UPLOADS, get_state, inventory, load_host, load_topology,
-                     prefixlen, segment_map, template_vmid, update_state)
+                     prefixlen, segment_map, template_vmid, update_state,
+                     uplink_tag)
 from .hostctl import HostError, host
 
 REMOTE_DIR = "/var/lib/vz/otlab"
@@ -121,7 +122,7 @@ def deploy_fortigate(log, topo):
             "--memory", str(fgt["memory"]), "--cores", str(fgt["cores"]), "--cpu", "host",
             "--ostype", "l26", "--serial0", "socket", "--vga", "serial0",
             "--tags", "otlab", "--onboot", "1",
-            "--net0", f"virtio,bridge={topo['lab']['uplink_bridge']}"]
+            "--net0", f"virtio,bridge={topo['lab']['uplink_bridge']}{uplink_tag(topo)}"]
     for i, seg in enumerate(topo["segments"], start=1):
         args += [f"--net{i}", f"virtio,bridge={seg['bridge']}"]
     log(f"VM {vmid} aanmaken ({len(topo['segments']) + 1} NIC's)")
@@ -186,12 +187,12 @@ def build_template(log, topo):
     if h.exists(vmid):
         log(f"template {vmid} bestaat al, overslaan")
         return
-    tnet = topo["lab"].get("template_net", "ip=dhcp")
+    tnet = topo["lab"]["template_net"]
     log(f"template-LXC {vmid} bouwen (tijdelijk op {topo['lab']['uplink_bridge']} voor packages)")
     h.run(["pct", "create", str(vmid), hcfg["template"], "--hostname", "otlab-template",
            "--cores", "2", "--memory", "1024", "--rootfs", f"{hcfg['storage']}:4",
            "--unprivileged", "1", "--features", "nesting=1",
-           "--net0", f"name=eth0,bridge={topo['lab']['uplink_bridge']},{tnet}",
+           "--net0", f"name=eth0,bridge={topo['lab']['uplink_bridge']}{uplink_tag(topo)},{tnet}",
            "--tags", "otlab"], log=log)
     h.run(["pct", "start", str(vmid)])
     for _ in range(60):

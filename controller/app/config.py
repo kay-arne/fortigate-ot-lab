@@ -26,9 +26,24 @@ _lock = threading.Lock()
 def load_topology() -> dict:
     with open(TOPOLOGY_FILE) as f:
         topo = yaml.safe_load(f)
+    # Keuzes uit de installer (host.json) overschrijven de defaults uit de YAML.
+    hcfg = load_host() if HOST_FILE.exists() else {}
+    lab = topo["lab"]
+    lab["uplink_bridge"] = hcfg.get("uplink_bridge") or lab["uplink_bridge"]
+    lab["uplink_vlan"] = str(hcfg.get("uplink_vlan") or lab.get("uplink_vlan") or "")
+    lab["template_net"] = hcfg.get("template_net") or lab.get("template_net", "ip=dhcp")
+    if hcfg.get("vmid_base"):
+        lab["vmid_base"] = int(hcfg["vmid_base"])
+        topo["fortigate"]["vmid"] = lab["vmid_base"]
     # WAN-instellingen uit de UI overschrijven de defaults uit de YAML.
     topo["fortigate"]["wan"].update(get_state().get("wan", {}))
     return topo
+
+
+def uplink_tag(topo: dict) -> str:
+    """',tag=<vlan>' voor net-opties op de uplink, of leeg."""
+    vlan = topo["lab"].get("uplink_vlan")
+    return f",tag={vlan}" if vlan else ""
 
 
 def load_host() -> dict:

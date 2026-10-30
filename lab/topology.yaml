@@ -8,6 +8,8 @@
 lab:
   name: fortigate-ot-lab
   vmid_base: 9100            # FortiGate = base, template = base+1, devices daarna
+  # uplink_bridge / VLAN / template_net / vmid_base worden door de installer
+  # gekozen en via data/host.json overschreven; dit zijn alleen defaults.
   uplink_bridge: vmbr0       # fysieke bridge (WAN/port1 van de FortiGate)
   # Het LXC-template hangt tijdens de build kort aan de uplink om packages te
   # downloaden. Zonder DHCP: "ip=192.168.1.239/24,gw=192.168.1.1"
