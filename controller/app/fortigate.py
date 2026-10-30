@@ -312,23 +312,17 @@ def api_status(topo) -> dict | None:
 # provisioning na de eerste boot
 # --------------------------------------------------------------------------
 def ensure_license(log, topo):
-    state = get_state()
+    """Alleen de licentiestatus loggen. De licentie (bestand of FortiFlex-token)
+    gaat bij de uitrol mee via cloud-init; opnieuw activeren herstart de
+    FortiGate en blokkeert dan de provisioning, dus dat doen we hier niet."""
     status = ssh_cli(topo, ["get system status"])
     m = re.search(r"License Status:\s*(\S+)", status)
     if not m:
-        log("⚠ licentiestatus niet gevonden in 'get system status'; overslaan")
+        log("⚠ licentiestatus niet gevonden in 'get system status'")
         return
     lic = m.group(1)
     log(f"licentiestatus: {lic}")
-    if lic.lower() == "valid":
-        return
-    if state.get("license_mode") == "fortiflex" and state.get("fortiflex_token"):
-        log("FortiFlex-token alsnog activeren via CLI (FortiGate herstart)")
-        ssh_cli(topo, [f"execute vm-license {state['fortiflex_token']}"])
-        time.sleep(180)  # herstart afwachten; anders is de oude sessie nog 'bereikbaar'
-        wait_reachable(log, topo)
-        wait_for_ssh(log, topo)
-    else:
+    if lic.lower() not in ("valid", "grace"):
         log("⚠ licentie nog niet geldig; controleer FortiGuard-bereikbaarheid. "
             "Zonder geldige licentie (en OT-licentie) ontbreken industriële signatures.")
 
