@@ -78,26 +78,16 @@ def _run_scenario(log, sc: dict):
     log(f"  resultaat: {outcome} (verwacht {sc['expect']}) -> {'PASS' if passed else 'FAIL'}")
     log(f"  detail: {res.get('detail')}")
 
-    time.sleep(4)  # FortiGate schrijft logs met kleine vertraging
     evidence = []
-    target = _target(sc["run"])
-    single = str(target.network_address) if target and target.num_addresses == 1 else None
     if get_state().get("fgt_api_key"):
-        for kind in sc.get("logs", []):
-            rows = fortigate.query_logs(topo, kind, res["srcip"], started, rows=200 if target and not single else 50,
-                                        dstip=single)
-            if target and not single:
-                rows = [r for r in rows if r.get("dstip") and ipaddress.ip_address(r["dstip"]) in target]
-            for r in rows[:10]:
-                evidence.append({
-                    "type": kind,
-                    "action": r.get("action"),
-                    "policy": r.get("policyname") or r.get("policyid"),
-                    "dst": f"{r.get('dstip')}:{r.get('dstport')}",
-                    "app": r.get("app") or r.get("service"),
-                    "attack": r.get("attack"),
-                    "msg": r.get("msg"),
-                })
+        # Een toegestane sessie wordt pas gelogd als hij sluit, soms seconden later.
+        deadline = time.time() + 15
+        time.sleep(4)
+        while True:
+            evidence = _collect_evidence(topo, sc, res["srcip"], started)
+            if evidence or time.time() > deadline:
+                break
+            time.sleep(2)
         for e in evidence:
             log(f"  FGT {e['type']}: {e['action']} policy={e['policy']} {e['dst']} "
                 f"app={e['app'] or '-'}{' attack=' + e['attack'] if e['attack'] else ''}")
@@ -108,6 +98,28 @@ def _run_scenario(log, sc: dict):
     all_results[sc["id"]] = {"passed": passed, "outcome": outcome, "detail": res.get("detail"),
                              "evidence": evidence, "at": started}
     update_state(results=all_results)
+
+
+def _collect_evidence(topo, sc: dict, srcip: str, started: float) -> list[dict]:
+    evidence = []
+    target = _target(sc["run"])
+    single = str(target.network_address) if target and target.num_addresses == 1 else None
+    for kind in sc.get("logs", []):
+        rows = fortigate.query_logs(topo, kind, srcip, started, rows=200 if target and not single else 50,
+                                    dstip=single)
+        if target and not single:
+            rows = [r for r in rows if r.get("dstip") and ipaddress.ip_address(r["dstip"]) in target]
+        for r in rows[:10]:
+            evidence.append({
+                "type": kind,
+                "action": r.get("action"),
+                "policy": r.get("policyname") or r.get("policyid"),
+                "dst": f"{r.get('dstip')}:{r.get('dstport')}",
+                "app": r.get("app") or r.get("service"),
+                "attack": r.get("attack"),
+                "msg": r.get("msg"),
+            })
+    return evidence
 
 
 def run_all(log):
