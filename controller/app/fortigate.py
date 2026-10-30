@@ -16,28 +16,15 @@ import paramiko
 import requests
 import urllib3
 
-from .config import DATA, get_state, inventory, netmask, segment_map, update_state, vm_name
+from .config import get_state, inventory, netmask, segment_map, update_state, vm_name
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 API_USER = "otlab-controller"
-FGT_KEY = DATA / "fgt_admin_rsa"
-
-
-def admin_key() -> paramiko.RSAKey:
-    """SSH-sleutel waarmee de controller als admin op de FortiGate inlogt.
-    De publieke sleutel gaat via cloud-init mee (ssh-public-key1), zodat de
-    controller niet afhankelijk is van het admin-wachtwoord."""
-    if not FGT_KEY.exists():
-        key = paramiko.RSAKey.generate(3072)
-        key.write_private_key_file(str(FGT_KEY))
-        FGT_KEY.chmod(0o600)
-    return paramiko.RSAKey.from_private_key_file(str(FGT_KEY))
-
-
-def admin_pubkey() -> str:
-    key = admin_key()
-    return f"{key.get_name()} {key.get_base64()}"
+# Tijdelijk admin-wachtwoord voor de eerste boot: zonder speciale tekens, zodat
+# het ongeschonden door cloud-init en de FortiOS-CLI komt. Tijdens de
+# provisioning vervangt de controller het door het wachtwoord uit de UI.
+BOOTSTRAP_PASSWORD = "DeploymentPassword"
 
 
 # --------------------------------------------------------------------------
@@ -54,8 +41,7 @@ def bootstrap_config(topo, state) -> str:
         "end",
         "config system admin",
         "    edit admin",
-        f'        set password "{state["fgt_admin_password"]}"',
-        f'        set ssh-public-key1 "{admin_pubkey()}"',
+        f"        set password {BOOTSTRAP_PASSWORD}",
         "    next",
         "end",
         "config system interface",
@@ -150,14 +136,28 @@ def wait_reachable(log, topo, timeout=1200):
     raise RuntimeError("FortiGate werd niet bereikbaar binnen de timeout.")
 
 
-def _ssh_connect(topo) -> paramiko.SSHClient:
-    """Log in als admin: eerst met de SSH-sleutel uit cloud-init, dan met het wachtwoord."""
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(mgmt_ip(topo), username="admin", pkey=admin_key(),
-                   password=get_state().get("fgt_admin_password"),
-                   look_for_keys=False, allow_agent=False, timeout=15)
-    return client
+def _admin_passwords() -> list[str]:
+    """Kandidaat-wachtwoorden voor admin, meest waarschijnlijke eerst (elke
+    mislukte poging telt mee voor de admin-lockout van FortiOS)."""
+    state = get_state()
+    final = state.get("fgt_admin_password")
+    order = [final, BOOTSTRAP_PASSWORD] if state.get("fgt_password_applied") else [BOOTSTRAP_PASSWORD, final]
+    return [p for i, p in enumerate(order) if p and p not in order[:i]]
+
+
+def _ssh_connect(topo, passwords: list[str] | None = None) -> paramiko.SSHClient:
+    """Log in als admin met het eerste wachtwoord dat werkt."""
+    err = None
+    for pw in passwords or _admin_passwords():
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(mgmt_ip(topo), username="admin", password=pw,
+                           look_for_keys=False, allow_agent=False, timeout=15)
+            return client
+        except paramiko.AuthenticationException as e:
+            err = e
+    raise err or paramiko.AuthenticationException("geen admin-wachtwoord bekend")
 
 
 def wait_for_ssh(log, topo, timeout=600):
@@ -176,10 +176,10 @@ def wait_for_ssh(log, topo, timeout=600):
                 last = str(e)
             time.sleep(15)
     raise RuntimeError(
-        "Kan niet als admin inloggen op de FortiGate (sleutel en wachtwoord geweigerd). "
-        "Controleer via de Proxmox-console: log in als admin en draai 'diagnose debug cloudinit show' "
-        "om te zien of de admin-config (wachtwoord/ssh-public-key1) is toegepast. Is de FortiGate "
-        "uitgerold met een oudere controllerversie (zonder SSH-sleutel), rol hem dan opnieuw uit.")
+        f"Kan niet als admin inloggen op de FortiGate (bootstrap-wachtwoord '{BOOTSTRAP_PASSWORD}' en het "
+        "ingestelde wachtwoord geweigerd). Controleer via de Proxmox-console: log in als admin en draai "
+        "'diagnose debug cloudinit show' om te zien of de bootstrap-config is toegepast. Is de FortiGate "
+        "uitgerold met een oudere controllerversie, rol hem dan opnieuw uit.")
 
 
 def ssh_cli(topo, commands: list[str], wait=2.0) -> str:
@@ -216,6 +216,12 @@ class Api:
     def get(self, path, **params):
         r = self.s.get(f"{self.base}/api/v2/{path}", params=params, timeout=30)
         r.raise_for_status()
+        return r.json()
+
+    def put(self, path, body):
+        r = self.s.put(f"{self.base}/api/v2/{path}", json=body, timeout=30)
+        if not r.ok:
+            raise RuntimeError(f"{path}: {r.status_code} {r.text[:300]}")
         return r.json()
 
     def upsert(self, path, name, body):
@@ -294,6 +300,38 @@ def ensure_api_key(log, topo):
     log("API-key opgeslagen")
 
 
+def ensure_admin_password(log, topo):
+    """Vervang het bootstrap-wachtwoord door het wachtwoord uit de UI (via REST,
+    dus zonder CLI-quoting) en controleer het met een SSH-login."""
+    state = get_state()
+    final = state.get("fgt_admin_password")
+    if not final or final == BOOTSTRAP_PASSWORD:
+        log("⚠ geen eigen admin-wachtwoord ingesteld; bootstrap-wachtwoord blijft actief")
+        return
+    if state.get("fgt_password_applied"):
+        try:
+            _ssh_connect(topo, [final]).close()
+            log("admin-wachtwoord is al ingesteld")
+            return
+        except paramiko.AuthenticationException:
+            pass
+    log("admin-wachtwoord instellen (bootstrap-wachtwoord vervangen)")
+    api = Api(topo)
+    try:
+        api.put("cmdb/system/admin/admin", {"password": final})
+    except RuntimeError as e:
+        log(f"  zonder oud wachtwoord geweigerd ({e}); opnieuw met old-password")
+        api.put("cmdb/system/admin/admin", {"password": final, "old-password": BOOTSTRAP_PASSWORD})
+    time.sleep(2)
+    try:
+        _ssh_connect(topo, [final]).close()
+    except paramiko.AuthenticationException:
+        raise RuntimeError("Admin-wachtwoord gewijzigd, maar inloggen met het nieuwe wachtwoord lukt niet. "
+                           f"Inloggen kan nog met '{BOOTSTRAP_PASSWORD}' als de wijziging niet is doorgevoerd.")
+    update_state(fgt_password_applied=True)
+    log("✔ admin-wachtwoord ingesteld en getest")
+
+
 def _resolve_ot_apps(api, log):
     """Zoek OT application-signatures op in de FortiGuard-database van de FortiGate."""
     res = api.get("cmdb/application/name", format="name|id|category")
@@ -317,6 +355,7 @@ def provision(log, topo):
         log(f"⚠ connectiviteitstest overgeslagen: {e}")
     ensure_license(log, topo)
     ensure_api_key(log, topo)
+    ensure_admin_password(log, topo)
     api = Api(topo)
     segs = segment_map(topo)
     nodes = {n["name"]: n for n in inventory(topo)}

@@ -96,7 +96,7 @@ geen harde sandbox. Kies je in de wizard voor root, dan komt de sleutel in
    FortiFlex-token), stel het WAN-IP van port1 en een admin-wachtwoord in.
 2. **Lab → Deploy lab**. De controller:
    - maakt de Purdue-bridges (`vmbr900`–`vmbr999`);
-   - maakt de FortiGate-VM (`<prefix>-fgt`) volgens de Fortinet Proxmox-handleiding, met een cloud-init config drive (interfaces, DNS, logging, licentie);
+   - maakt de FortiGate-VM (`<prefix>-fgt`) volgens de Fortinet Proxmox-handleiding, met een cloud-init config drive (interfaces, DNS, logging, licentie en het tijdelijke admin-wachtwoord `DeploymentPassword`, dat bij de provisioning via de REST API wordt vervangen door jouw wachtwoord);
    - bouwt één LXC-template met alle OT-simulators (Modbus, S7comm, OPC UA, HMI, historian) en kloont daaruit de devices en probes;
    - koppelt via SSH een REST API-user en rolt de OT-policies uit (adressen, conduits, application control, IPS, VIP).
 3. **Losse componenten**: vink onder *Lab* de FortiGate, de policies, het netwerk, het template of

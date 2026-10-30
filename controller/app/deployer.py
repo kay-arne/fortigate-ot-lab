@@ -121,7 +121,7 @@ def deploy_fortigate(log, topo):
     h.run(["install", "-m", "0644", f"{h.workdir}/{ISO_NAME}", f"/var/lib/vz/template/iso/{ISO_NAME}"])
 
     # nieuwe FortiGate: API-key en provisioning van een eventuele vorige zijn ongeldig
-    update_state(fgt_api_key=None, fgt_provisioned=False)
+    update_state(fgt_api_key=None, fgt_provisioned=False, fgt_password_applied=False)
     try:
         create_fortigate_vm(log, topo, hcfg["storage"], remote_img)
     except Exception:
@@ -413,7 +413,7 @@ def destroy_selected(log, items):
         _destroy_vmid(log, h, n["vmid"], n["hostname"])
     if "fortigate" in items:
         _destroy_vmid(log, h, topo["fortigate"]["vmid"], vm_name(topo, topo["fortigate"]["name"]))
-        update_state(fgt_api_key=None, fgt_provisioned=False)
+        update_state(fgt_api_key=None, fgt_provisioned=False, fgt_password_applied=False)
     if "template" in items:
         try:
             _destroy_vmid(log, h, template_vmid(topo), vm_name(topo, "template"))
@@ -473,4 +473,4 @@ def destroy_all(log, remove_template=False, remove_net=False):
         h.run([tool, "destroy", str(vmid), "--purge", "1"], check=False)
     if remove_net:
         remove_bridges(log, topo)
-    update_state(deployed=False, fgt_api_key=None)
+    update_state(deployed=False, fgt_api_key=None, fgt_password_applied=False)
