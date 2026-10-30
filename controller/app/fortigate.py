@@ -447,6 +447,52 @@ def suppress_setup_wizard(log, api):
         log(f"  release-overzicht niet uitgezet: {e}")
 
 
+# OT-weergave in de GUI: Purdue-levels (assets per laag) en virtual patching.
+GUI_OT_FEATURES = {"gui-ot": "enable", "gui-virtual-patch-profile": "enable"}
+VPATCH_PROFILE = "OT-vpatch"
+
+
+def enable_ot_features(log, api, topo) -> str | None:
+    """Feature visibility voor OT, Purdue-level per segmentpoort en een virtual
+    patching-profiel. Geeft de profielnaam terug als dat profiel bestaat."""
+    try:
+        api.put("cmdb/system/settings", GUI_OT_FEATURES)
+        cur = api.get("cmdb/system/settings").get("results", {})
+        on = [k for k, v in GUI_OT_FEATURES.items() if cur.get(k) == v]
+        missing = [k for k in GUI_OT_FEATURES if k not in on]
+        log(f"feature visibility: {', '.join(on) or 'geen'} aan"
+            + (f"; niet gelukt: {', '.join(missing)}" if missing else ""))
+    except (RuntimeError, requests.RequestException) as e:
+        log(f"⚠ feature visibility niet gezet: {e}")
+
+    # Purdue-level van assets volgt de poort waarop ze ontdekt worden.
+    levels = []
+    for seg in topo["segments"]:
+        level = seg.get("purdue", "")
+        level = "4" if level in ("", "-") else level  # testsegment = IT
+        for attempt in (level, "1") if level == "0" else (level,):  # L0 bestaat niet in elke release
+            try:
+                api.put(f"cmdb/system/interface/{seg['port']}", {"default-purdue-level": attempt})
+                got = api.get(f"cmdb/system/interface/{seg['port']}").get("results", [{}])
+                got = (got[0] if isinstance(got, list) and got else got or {}).get("default-purdue-level")
+                if got is not None and str(got) == attempt:
+                    levels.append(f"{seg['port']}=L{attempt}")
+                    break
+            except (RuntimeError, requests.RequestException):
+                continue
+    log(f"Purdue-levels: {', '.join(levels) if levels else 'niet ondersteund door deze FortiOS-versie'}")
+
+    try:
+        api.upsert("cmdb/virtual-patch/profile", VPATCH_PROFILE, {
+            "name": VPATCH_PROFILE, "comment": "OT virtual patching (FortiGuard OT-signatures)",
+            "severity": "info low medium high critical", "action": "block", "log": "enable"})
+        log(f"virtual patching-profiel {VPATCH_PROFILE} aangemaakt")
+        return VPATCH_PROFILE
+    except (RuntimeError, requests.RequestException) as e:
+        log(f"⚠ virtual patching-profiel niet aangemaakt (licentie of FortiOS-versie?): {e}")
+        return None
+
+
 def _resolve_ot_apps(api, log):
     """Zoek OT application-signatures op in de FortiGuard-database van de FortiGate."""
     res = api.get("cmdb/application/name", format="name|id|category")
@@ -473,6 +519,7 @@ def provision(log, topo):
     ensure_admin_password(log, topo)
     api = Api(topo)
     suppress_setup_wizard(log, api)
+    vpatch = enable_ot_features(log, api, topo)
     segs = segment_map(topo)
     nodes = {n["name"]: n for n in inventory(topo)}
 
@@ -563,7 +610,16 @@ def provision(log, topo):
         }
         if app:
             body["application-list"] = app
-        api.upsert("cmdb/firewall/policy", pid, body)
+        if vpatch and di != "port1":  # virtual patching op alles wat de fabriek in gaat
+            body["virtual-patch-profile"] = vpatch
+        try:
+            api.upsert("cmdb/firewall/policy", pid, body)
+        except RuntimeError:
+            if "virtual-patch-profile" not in body:
+                raise
+            log(f"  policy {pid}: virtual-patch-profile geweigerd, zonder opnieuw")
+            body.pop("virtual-patch-profile")
+            api.upsert("cmdb/firewall/policy", pid, body)
     update_state(fgt_provisioned=True)
     log("FortiGate OT-provisioning klaar")
 
