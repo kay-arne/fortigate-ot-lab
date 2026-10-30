@@ -40,6 +40,14 @@ def bootstrap_config(topo, state) -> str:
         "    set admintimeout 60",
         f"    set admin-sport {fgt.get('admin_https_port', 443)}",
         "end",
+        # geen --More--: de controller leest CLI-output over SSH
+        "config system console",
+        "    set output standard",
+        "end",
+        # lab: geen complexiteitseisen, zodat het wachtwoord uit de UI altijd geaccepteerd wordt
+        "config system password-policy",
+        "    set status disable",
+        "end",
         "config system admin",
         "    edit admin",
         f"        set password {BOOTSTRAP_PASSWORD}",
@@ -155,6 +163,7 @@ def _ssh_connect(topo, passwords: list[str] | None = None) -> paramiko.SSHClient
         try:
             client.connect(mgmt_ip(topo), username="admin", password=pw,
                            look_for_keys=False, allow_agent=False, timeout=15)
+            client.admin_password = pw  # voor 'Please enter current administrator password'
             return client
         except paramiko.AuthenticationException as e:
             err = e
@@ -194,18 +203,57 @@ def wait_for_ssh(log, topo, timeout=900):
         "'diagnose debug cloudinit show' om te zien of de bootstrap-config is toegepast.")
 
 
-def ssh_cli(topo, commands: list[str], wait=2.0) -> str:
-    """Voer CLI-regels uit over SSH (interactieve shell)."""
+CLI_PROMPT = re.compile(r"[#$] $")
+PW_PROMPT = re.compile(r"password:\s*$", re.I)
+YN_PROMPT = re.compile(r"\(y/n\)\s*$", re.I)
+MORE_PROMPT = re.compile(r"--More--\s*$")
+
+
+def _read_until_prompt(shell, timeout) -> str:
+    """Lees tot de CLI een prompt toont (of de timeout verloopt)."""
+    buf = ""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if shell.recv_ready():
+            buf += shell.recv(65535).decode(errors="replace")
+            if MORE_PROMPT.search(buf):
+                shell.send(" ")
+                continue
+            tail = buf.rstrip()
+            if CLI_PROMPT.search(buf) or PW_PROMPT.search(tail) or YN_PROMPT.search(tail):
+                time.sleep(0.3)  # nog meer output onderweg?
+                if not shell.recv_ready():
+                    return buf
+        elif shell.exit_status_ready():
+            return buf
+        else:
+            time.sleep(0.2)
+    return buf
+
+
+def ssh_cli(topo, commands: list[str], timeout=60) -> str:
+    """Voer CLI-regels uit over SSH (interactieve shell). Vraagt FortiOS om het
+    huidige admin-wachtwoord of om een bevestiging (y/n), dan antwoordt de
+    controller zelf."""
     client = _ssh_connect(topo)
     shell = client.invoke_shell(width=250)
-    time.sleep(1)
-    out = ""
-    for cmd in commands:
-        shell.send(cmd + "\n")
-        time.sleep(wait)
-        while shell.recv_ready():
-            out += shell.recv(65535).decode(errors="replace")
-    client.close()
+    out = _read_until_prompt(shell, 15)
+    try:
+        for cmd in commands:
+            shell.send(cmd + "\n")
+            chunk = _read_until_prompt(shell, timeout)
+            for _ in range(3):
+                tail = chunk.rstrip()
+                if PW_PROMPT.search(tail):
+                    shell.send(client.admin_password + "\n")
+                elif YN_PROMPT.search(tail):
+                    shell.send("y\n")
+                else:
+                    break
+                chunk += _read_until_prompt(shell, timeout)
+            out += chunk
+    finally:
+        client.close()
     return out
 
 
@@ -254,15 +302,19 @@ def ensure_license(log, topo):
     state = get_state()
     status = ssh_cli(topo, ["get system status"])
     m = re.search(r"License Status:\s*(\S+)", status)
-    lic = m.group(1) if m else "unknown"
+    if not m:
+        log("⚠ licentiestatus niet gevonden in 'get system status'; overslaan")
+        return
+    lic = m.group(1)
     log(f"licentiestatus: {lic}")
     if lic.lower() == "valid":
         return
     if state.get("license_mode") == "fortiflex" and state.get("fortiflex_token"):
         log("FortiFlex-token alsnog activeren via CLI (FortiGate herstart)")
-        ssh_cli(topo, [f"execute vm-license {state['fortiflex_token']}", "y"], wait=5)
-        time.sleep(60)
+        ssh_cli(topo, [f"execute vm-license {state['fortiflex_token']}"])
+        time.sleep(180)  # herstart afwachten; anders is de oude sessie nog 'bereikbaar'
         wait_reachable(log, topo)
+        wait_for_ssh(log, topo)
     else:
         log("⚠ licentie nog niet geldig; controleer FortiGuard-bereikbaarheid. "
             "Zonder geldige licentie (en OT-licentie) ontbreken industriële signatures.")
@@ -271,7 +323,7 @@ def ensure_license(log, topo):
 def connectivity_test(log, topo):
     out = ssh_cli(topo, ["get router info routing-table static", "get system dns",
                          "execute ping-options repeat-count 2",
-                         "execute ping update.fortiguard.net"], wait=4)
+                         "execute ping update.fortiguard.net"])
     resolved = re.search(r"PING update\.fortiguard\.net \(([\d.]+)\)", out)
     replies = re.search(r"(\d+) packets received", out)
     if not resolved:
@@ -295,16 +347,19 @@ def ensure_api_key(log, topo):
         "config system api-user",
         f'edit "{API_USER}"',
         "set accprofile super_admin",
-        "set vdom root",
+        "config vdom",
+        "edit root",
+        "next",
+        "end",
         "config trusthost",
         "edit 1",
         f"set ipv4-trusthost {ctl_ip} 255.255.255.255",
+        "next",
         "end",
         "next",
         "end",
         f"execute api-user generate-key {API_USER}",
-        "y",
-    ], wait=3)
+    ])
     m = re.search(r"New API key:\s*(\S+)", out)
     if not m:
         raise RuntimeError(f"Kon API-key niet genereren. CLI-output:\n{out[-800:]}")
