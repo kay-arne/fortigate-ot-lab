@@ -19,7 +19,7 @@ from .config import (ROOT, UPLOADS, contractor_credentials, get_state, inventory
 from .hostctl import HostError, host
 
 ISO_NAME = "otlab-fgt-config.iso"
-PIP_PACKAGES = "pymodbus==3.7.4 python-snap7==1.3 asyncua==1.1.5 flask==3.1.0"
+PIP_PACKAGES = "pymodbus==3.6.9 python-snap7==1.3 asyncua==1.1.5 flask==3.1.0"
 APT_PACKAGES = "python3-venv python3-pip nmap curl netcat-openbsd openssh-server tcpdump iproute2"
 
 
