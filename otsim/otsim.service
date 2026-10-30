@@ -1,0 +1,14 @@
+[Unit]
+Description=otsim OT device simulator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/otsim
+Environment=PYTHONPATH=/opt/otsim PYTHONUNBUFFERED=1
+ExecStart=/opt/otsim/venv/bin/python -m otsim --config /etc/otsim.json
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

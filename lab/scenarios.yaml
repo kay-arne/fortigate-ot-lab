@@ -1,0 +1,129 @@
+# Validatietests voor het testcenter.
+#
+# Elke test draait een 'otprobe'-commando op een node in het lab (probe of
+# device) en vergelijkt de uitkomst met de verwachting:
+#   expect: allowed  -> de actie moet slagen
+#   expect: blocked  -> de FortiGate moet de actie tegenhouden
+# Daarna haalt de controller de FortiGate-logs (traffic / app-ctrl / ips) op
+# voor het bron-IP, zodat je ziet *welke* policy of signature ingreep.
+
+scenarios:
+  # --- Segmentatie (IEC 62443 zones & conduits) ---------------------------
+  - id: it-to-plc
+    group: Segmentatie
+    title: "IT/testcenter leest direct een PLC uit"
+    from: probe-test
+    run: "modbus-read 10.10.0.10 0 4"
+    expect: blocked
+    why: "Geen conduit van IT naar L1; implicit deny moet loggen."
+    logs: [traffic/forward]
+
+  - id: recon-scan
+    group: Segmentatie
+    title: "Netwerkscan vanaf IT richting L1 (502/102/4840)"
+    from: probe-test
+    run: "scan 10.10.0.0/24 102,502,4840"
+    expect: blocked
+    why: "Vanaf IT mogen geen OT-services zichtbaar zijn."
+    logs: [traffic/forward]
+
+  - id: remote-access
+    group: Segmentatie
+    title: "Remote access via DMZ jump host"
+    from: probe-test
+    run: "tcp 10.35.0.10 22"
+    expect: allowed
+    why: "Toegestaan conduit: IT -> L3.5 jump host (SSH)."
+    logs: [traffic/forward]
+
+  - id: dmz-bypass
+    group: Segmentatie
+    title: "DMZ-host probeert L1 direct te bereiken"
+    from: probe-dmz
+    run: "modbus-read 10.10.0.10 0 4"
+    expect: blocked
+    why: "De DMZ termineert; geen doorsteek naar control."
+    logs: [traffic/forward]
+
+  - id: l1-to-l3
+    group: Segmentatie
+    title: "Lateral movement: PLC-segment naar historian"
+    from: probe-ctl
+    run: "tcp 10.30.0.10 8080"
+    expect: blocked
+    why: "L1 initieert geen verbindingen naar L3."
+    logs: [traffic/forward]
+
+  - id: l2-to-l0
+    group: Segmentatie
+    title: "Willekeurige L2-host naar field I/O"
+    from: probe-sup
+    run: "modbus-read 10.0.0.10 0 2"
+    expect: blocked
+    why: "Alleen PLC's en de EWS praten met L0."
+    logs: [traffic/forward]
+
+  # --- OT-protocol deep inspection (application control) ------------------
+  - id: l3-modbus-read
+    group: OT deep inspection
+    title: "L3 leest Modbus-registers (read-only conduit)"
+    from: probe-ops
+    run: "modbus-read 10.10.0.10 0 4"
+    expect: allowed
+    why: "Policy 'L3->L1 Modbus read-only' staat lezen toe; zichtbaar in app-ctrl log."
+    logs: [traffic/forward, app-ctrl]
+
+  - id: l3-modbus-write
+    group: OT deep inspection
+    title: "L3 schrijft een Modbus-setpoint"
+    from: probe-ops
+    run: "modbus-write 10.10.0.10 1 999"
+    expect: blocked
+    why: "Zelfde poort 502, maar het OT-readonly profiel blokkeert write function codes."
+    logs: [app-ctrl, traffic/forward]
+
+  - id: opcua-gw-write
+    group: OT deep inspection
+    title: "OPC UA gateway probeert te schrijven naar PLC"
+    from: opcua-gw
+    run: "modbus-write 10.10.0.30 1 0"
+    expect: blocked
+    why: "Gateway heeft alleen een read-only conduit."
+    logs: [app-ctrl]
+
+  - id: hmi-write
+    group: OT deep inspection
+    title: "HMI zet een setpoint (legitiem)"
+    from: scada-hmi
+    run: "modbus-write 10.10.0.10 1 60"
+    expect: allowed
+    why: "HMI mag schrijven; FortiGate logt de write wel (audit trail)."
+    logs: [app-ctrl]
+
+  - id: s7-stop-unauth
+    group: OT deep inspection
+    title: "S7 CPU STOP vanaf L3"
+    from: probe-ops
+    run: "s7-stop 10.10.0.20"
+    expect: blocked
+    why: "Geen S7-conduit vanaf L3."
+    logs: [traffic/forward]
+
+  - id: s7-read-ews
+    group: OT deep inspection
+    title: "Engineering workstation leest S7 CPU-status"
+    from: ews
+    run: "s7-read 10.10.0.20"
+    expect: allowed
+    why: "EWS heeft het engineering-conduit naar L1."
+    logs: [app-ctrl]
+
+  # --- Zichtbaarheid -------------------------------------------------------
+  - id: historian-opcua
+    group: Zichtbaarheid
+    title: "Historian leest OPC UA bij de gateway"
+    from: historian
+    run: "opcua-browse opc.tcp://10.20.0.20:4840"
+    expect: allowed
+    why: "Legitieme data-flow L3 <- L2, zichtbaar als OPC UA in application control."
+    logs: [app-ctrl]

@@ -1,0 +1,100 @@
+# FortiGate OT Lab - topologie volgens het Purdue-model.
+#
+# De enige verbinding tussen de fysieke omgeving (vmbr0) en de virtuele
+# OT-segmenten loopt via de FortiGate. Alle OT-bridges hebben GEEN fysieke
+# poort; de controller beheert devices out-of-band via de hypervisor (pct exec),
+# niet via het netwerk.
+
+lab:
+  name: fortigate-ot-lab
+  vmid_base: 9100            # FortiGate = base, template = base+1, devices daarna
+  uplink_bridge: vmbr0       # fysieke bridge (WAN/port1 van de FortiGate)
+  # Het LXC-template hangt tijdens de build kort aan de uplink om packages te
+  # downloaden. Zonder DHCP: "ip=192.168.1.239/24,gw=192.168.1.1"
+  template_net: "ip=dhcp"
+
+fortigate:
+  vmid: 9100
+  name: fgt-ot
+  cores: 2
+  memory: 4096
+  # port1 = uplink; overige poorten volgen de volgorde van 'segments'
+  wan:
+    mode: static             # static | dhcp  (instelbaar in de web UI)
+    ip: ""                   # bijv. 192.168.1.250/24
+    gateway: ""
+  admin_https_port: 443
+
+segments:
+  - id: dmz
+    name: "L3.5 OT-DMZ"
+    purdue: "3.5"
+    port: port2
+    bridge: vmbr935
+    subnet: 10.35.0.0/24
+    gateway: 10.35.0.1
+  - id: ops
+    name: "L3 Site Operations"
+    purdue: "3"
+    port: port3
+    bridge: vmbr930
+    subnet: 10.30.0.0/24
+    gateway: 10.30.0.1
+  - id: sup
+    name: "L2 Supervisory Control"
+    purdue: "2"
+    port: port4
+    bridge: vmbr920
+    subnet: 10.20.0.0/24
+    gateway: 10.20.0.1
+  - id: ctl
+    name: "L1 Basic Control"
+    purdue: "1"
+    port: port5
+    bridge: vmbr910
+    subnet: 10.10.0.0/24
+    gateway: 10.10.0.1
+  - id: proc
+    name: "L0 Process / Field I/O"
+    purdue: "0"
+    port: port6
+    bridge: vmbr900
+    subnet: 10.0.0.0/24
+    gateway: 10.0.0.1
+  - id: test
+    name: "Test Center (rogue / IT-simulatie)"
+    purdue: "-"
+    port: port7
+    bridge: vmbr999
+    subnet: 10.99.0.0/24
+    gateway: 10.99.0.1
+
+# Virtuele OT-devices (LXC). 'role' verwijst naar een simulator in otsim/.
+devices:
+  # --- L3.5 DMZ ---
+  - {name: dmz-jump,      segment: dmz,  ip: 10.35.0.10, role: jumphost}
+  - {name: dmz-patch,     segment: dmz,  ip: 10.35.0.20, role: webservice, args: {title: "Patch / AV update server"}}
+  - {name: dmz-histmirror,segment: dmz,  ip: 10.35.0.30, role: webservice, args: {title: "Historian mirror (read-only)"}}
+  # --- L3 Operations ---
+  - {name: historian,     segment: ops,  ip: 10.30.0.10, role: historian, args: {opcua: "opc.tcp://10.20.0.20:4840", modbus: ["10.10.0.10", "10.10.0.30"]}}
+  - {name: mes,           segment: ops,  ip: 10.30.0.20, role: webservice, args: {title: "MES / Batch management"}}
+  # --- L2 Supervisory ---
+  - {name: scada-hmi,     segment: sup,  ip: 10.20.0.10, role: hmi, args: {plcs: ["10.10.0.10", "10.10.0.30"], s7: "10.10.0.20"}}
+  - {name: opcua-gw,      segment: sup,  ip: 10.20.0.20, role: opcua_gw, args: {plcs: ["10.10.0.10", "10.10.0.30"]}}
+  - {name: ews,           segment: sup,  ip: 10.20.0.30, role: ews}
+  # --- L1 Control ---
+  - {name: plc-tank,      segment: ctl,  ip: 10.10.0.10, role: modbus_plc, args: {process: tank, io: "10.0.0.10"}}
+  - {name: plc-s7-mixer,  segment: ctl,  ip: 10.10.0.20, role: s7_plc}
+  - {name: plc-conveyor,  segment: ctl,  ip: 10.10.0.30, role: modbus_plc, args: {process: conveyor, io: "10.0.0.11"}}
+  # --- L0 Process ---
+  - {name: io-level,      segment: proc, ip: 10.0.0.10,  role: io_device, args: {kind: level_sensor}}
+  - {name: io-motor,      segment: proc, ip: 10.0.0.11,  role: io_device, args: {kind: motor_drive}}
+
+# Test-probes: één per segment, vanuit waar validatietests draaien.
+probes:
+  ip_suffix: 250            # probe krijgt <subnet>.250
+  segments: [dmz, ops, sup, ctl, proc, test]
+
+resources:
+  device: {cores: 1, memory: 256, disk: 4}
+  probe:  {cores: 1, memory: 512, disk: 4}

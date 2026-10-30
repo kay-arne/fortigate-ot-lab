@@ -1,0 +1,63 @@
+:root {
+  --bg: #0f1419; --panel: #172029; --line: #26323d; --fg: #dde4ea; --muted: #8a99a6;
+  --accent: #da291c; --ok: #2ea66a; --warn: #d9a400; --bad: #d64545; --blue: #3b82c4;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+header { display: flex; align-items: center; gap: 24px; padding: 10px 20px; background: var(--panel); border-bottom: 2px solid var(--accent); }
+h1 { font-size: 18px; margin: 0; }
+h2 { font-size: 15px; margin: 0 0 10px; }
+nav button { background: none; border: none; color: var(--muted); padding: 6px 12px; cursor: pointer; font-size: 14px; }
+nav button.active { color: var(--fg); border-bottom: 2px solid var(--fg); }
+main { padding: 20px; max-width: 1300px; margin-right: 0; }
+body.logopen main { margin-right: 460px; }
+.tab { display: none; } .tab.active { display: block; }
+button { background: var(--line); color: var(--fg); border: 1px solid #34424f; border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+button:hover { filter: brightness(1.2); }
+button.primary { background: var(--accent); border-color: var(--accent); }
+button.danger { background: #4a1f1f; border-color: var(--bad); }
+input, select { background: #0c1116; color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 6px 8px; }
+label { display: block; margin: 6px 0; }
+label input, label select { display: block; width: 100%; margin-top: 3px; }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.muted { color: var(--muted); font-size: 12.5px; }
+.sub { margin: 8px 0 0 22px; }
+.pill { font-size: 12px; padding: 2px 10px; border-radius: 10px; background: var(--line); margin-left: auto; }
+.pill.ok { background: #183a2a; color: #7fe0ab; } .pill.bad { background: #3d1c1c; color: #f29a9a; }
+
+/* topologie */
+.purdue { display: flex; flex-direction: column; gap: 10px; }
+.fgt { display: flex; align-items: center; gap: 12px; background: #2a1414; border: 1px solid var(--accent); border-radius: 8px; padding: 12px 16px; }
+.fgt b { color: #ff8a80; }
+.zone { display: grid; grid-template-columns: 210px 1fr; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--blue); border-radius: 8px; }
+.zone .meta { padding: 10px 12px; border-right: 1px solid var(--line); }
+.zone .meta .lvl { font-size: 12px; color: var(--muted); }
+.zone .nodes { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; }
+.node { background: #0c1116; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; min-width: 150px; }
+.node .n { font-weight: 600; } .node .ip { font-size: 12px; color: var(--muted); }
+.node.probe { border-style: dashed; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+.dot.running { background: var(--ok); } .dot.stopped { background: var(--warn); } .dot.absent { background: #444; }
+
+/* tests */
+table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 8px; overflow: hidden; margin-bottom: 16px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: #1d2833; font-weight: 600; }
+td .why { color: var(--muted); font-size: 12px; }
+.res.pass { color: var(--ok); font-weight: 700; } .res.fail { color: var(--bad); font-weight: 700; }
+.ev { font-family: ui-monospace, monospace; font-size: 11.5px; color: #b9c6d1; }
+tr.grp td { background: #121a22; font-weight: 600; color: var(--muted); }
+
+/* log */
+#log { position: fixed; right: 0; top: 0; bottom: 0; width: 450px; background: #090d11; border-left: 1px solid var(--line); display: none; flex-direction: column; }
+body.logopen #log { display: flex; }
+.loghead { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid var(--line); }
+#log pre { flex: 1; overflow: auto; margin: 0; padding: 10px; font-size: 12px; white-space: pre-wrap; }
+
+@media (max-width: 900px) {
+  body.logopen main { margin-right: 0; }
+  #log { width: 100%; height: 50vh; top: auto; }
+  .zone { grid-template-columns: 1fr; }
+}
