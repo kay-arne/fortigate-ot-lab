@@ -133,3 +133,21 @@ button.pill.version.new { background: #1d3347; color: #9cc8ef; }
 .commits li { padding: 6px 0; border-bottom: 1px solid var(--line); }
 .commits .mono { color: #9cc8ef; margin-right: 8px; }
 a { color: #9cc8ef; }
+
+/* --- componentselectie -------------------------------------------------- */
+.selbar { position: sticky; top: 0; z-index: 5; display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; }
+.selinfo { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.selactions { display: flex; gap: 8px; flex-wrap: wrap; }
+button:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+.infra { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; }
+.comp { display: flex; align-items: flex-start; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer; }
+.comp .dot { margin-top: 5px; }
+.comp .ip { font-size: 12px; color: var(--muted); }
+.fgtcomp { background: #2a1414; border-color: var(--accent); }
+.fgtcomp b { color: #ff8a80; }
+.node { cursor: pointer; }
+[data-comp] input[type=checkbox] { pointer-events: none; margin: 2px 6px 0 0; width: auto; display: inline; }
+[data-comp].selected { outline: 2px solid #3b9cff; outline-offset: -1px; }
+.segsel { display: flex; align-items: center; gap: 6px; margin: 0; cursor: pointer; }
+.segsel input { width: auto !important; display: inline !important; margin: 0; }

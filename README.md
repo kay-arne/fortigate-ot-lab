@@ -99,7 +99,11 @@ geen harde sandbox. Kies je in de wizard voor root, dan komt de sleutel in
    - maakt de FortiGate-VM (`<prefix>-fgt`) volgens de Fortinet Proxmox-handleiding, met een cloud-init config drive (interfaces, DNS, logging, licentie);
    - bouwt één LXC-template met alle OT-simulators (Modbus, S7comm, OPC UA, HMI, historian) en kloont daaruit de devices en probes;
    - koppelt via SSH een REST API-user en rolt de OT-policies uit (adressen, conduits, application control, IPS, VIP).
-3. **Testcenter**: draai de validatietests of eigen ad-hoc tests. Per test zie je PASS/FAIL en de
+3. **Losse componenten**: vink onder *Lab* de FortiGate, de policies, het netwerk, het template of
+   individuele containers (of een heel segment) aan en kies *Uitrollen* (ontbrekende uitrollen),
+   *Opnieuw uitrollen* (eerst verwijderen) of *Verwijderen*. Handig om alleen de FortiGate te testen of één
+   mislukte container opnieuw te doen zonder het hele lab af te breken.
+4. **Testcenter**: draai de validatietests of eigen ad-hoc tests. Per test zie je PASS/FAIL en de
    FortiGate-logregels (policy, applicatie, signature) die erbij horen.
 
 ## Wat zit erin

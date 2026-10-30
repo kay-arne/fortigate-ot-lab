@@ -51,27 +51,81 @@ async function action(path, data, onDone) {
 }
 
 // --- lab view --------------------------------------------------------------
+// --- componentselectie -----------------------------------------------------
+const selected = new Set();
+const CLABEL = { network: "Netwerk (bridges)", fortigate: "FortiGate-VM", template: "LXC-template", policies: "FortiGate-policies" };
+
+function updateSelBar() {
+  const n = selected.size;
+  $("#sel-count").textContent = n ? `${n} geselecteerd: ${[...selected].map((i) => CLABEL[i] || i.replace("node:", "")).join(", ")}` : "Niets geselecteerd";
+  ["#btn-sel-deploy", "#btn-sel-recreate", "#btn-sel-destroy", "#btn-sel-clear"].forEach((b) => ($(b).disabled = !n));
+  $$("[data-comp]").forEach((el) => {
+    const on = selected.has(el.dataset.comp);
+    el.classList.toggle("selected", on);
+    const cb = el.querySelector("input[type=checkbox]");
+    if (cb) cb.checked = on;
+  });
+  $$("[data-seg-select]").forEach((cb) => {
+    const ids = [...$$(`[data-seg="${cb.dataset.segSelect}"]`)].map((el) => el.dataset.comp);
+    cb.checked = ids.length > 0 && ids.every((i) => selected.has(i));
+  });
+}
+
+const check = () => `<input type="checkbox" tabindex="-1" aria-label="selecteer">`;
+
 function renderLab(lab) {
   if (!lab) { $("#topology").innerHTML = ""; return; }
   const bySeg = {};
   lab.nodes.forEach((n) => (bySeg[n.segment] ||= []).push(n));
   const f = lab.fortigate;
+  const t = lab.template || { vmid: "-", status: "unknown" };
+  const bridges = lab.segments.filter((s) => s.present).length;
   let html = `<div class="purdue">
     <div class="zone" style="border-left-color:#666"><div class="meta"><b>L4/L5 Enterprise</b><div class="lvl">fysiek netwerk (vmbr0)</div></div>
       <div class="nodes"><div class="node"><div class="n">Jouw IT-netwerk</div><div class="ip">enige toegang loopt via de FortiGate</div></div></div></div>
-    <div class="fgt"><span class="dot ${f.status}"></span><b>${esc(f.name || "FortiGate")} · ${f.vmid}</b>
-      <span>port1 ${esc(f.wan.ip || f.wan.mode)}</span><span class="muted">status: ${f.status} · REST API: ${f.api ? "gekoppeld" : "nee"}</span></div>`;
+    <div class="infra">
+      <div class="comp fgtcomp" data-comp="fortigate">${check()}<span class="dot ${f.status}"></span>
+        <div><b>${esc(f.name || "FortiGate")} · ${f.vmid}</b><div class="ip">port1 ${esc(f.wan.ip || f.wan.mode)} · status: ${esc(f.status)}</div></div></div>
+      <div class="comp" data-comp="policies">${check()}<span class="dot ${f.api ? "running" : "absent"}"></span>
+        <div><b>FortiGate-policies</b><div class="ip">REST API ${f.api ? "gekoppeld" : "nog niet gekoppeld"} · adressen, conduits, OT-profielen</div></div></div>
+      <div class="comp" data-comp="network">${check()}<span class="dot ${bridges === lab.segments.length ? "running" : bridges ? "stopped" : "absent"}"></span>
+        <div><b>Netwerk</b><div class="ip">${bridges}/${lab.segments.length} Purdue-bridges aanwezig</div></div></div>
+      <div class="comp" data-comp="template">${check()}<span class="dot ${t.status === "stopped" ? "running" : t.status}"></span>
+        <div><b>LXC-template · ${t.vmid}</b><div class="ip">${t.status === "absent" ? "nog niet gebouwd" : "basis voor alle containers"}</div></div></div>
+    </div>`;
   lab.segments.forEach((s) => {
-    html += `<div class="zone"><div class="meta"><b>${esc(s.name)}</b>
+    html += `<div class="zone"><div class="meta"><label class="segsel"><input type="checkbox" data-seg-select="${esc(s.id)}"> <b>${esc(s.name)}</b></label>
       <div class="lvl">${esc(s.port)} · ${esc(s.bridge)} ${s.present ? "" : "(ontbreekt)"} · ${esc(s.subnet)}</div></div><div class="nodes">`;
     (bySeg[s.id] || []).forEach((n) => {
-      html += `<div class="node ${n.kind}"><div class="n"><span class="dot ${n.status}"></span>${esc(n.hostname || n.name)}</div>
+      html += `<div class="node ${n.kind}" data-comp="node:${esc(n.name)}" data-seg="${esc(s.id)}">
+        <div class="n">${check()}<span class="dot ${n.status}"></span>${esc(n.hostname || n.name)}</div>
         <div class="ip">${esc(n.ip)} · ${esc(n.role)} · ${n.vmid}</div></div>`;
     });
     html += `</div></div>`;
   });
   $("#topology").innerHTML = html + "</div>";
+  $$("#topology [data-comp]").forEach((el) => el.addEventListener("click", () => {
+    const id = el.dataset.comp;
+    selected.has(id) ? selected.delete(id) : selected.add(id);
+    updateSelBar();
+  }));
+  $$("#topology [data-seg-select]").forEach((cb) => cb.addEventListener("change", () => {
+    $$(`[data-seg="${cb.dataset.segSelect}"]`).forEach((el) => (cb.checked ? selected.add(el.dataset.comp) : selected.delete(el.dataset.comp)));
+    updateSelBar();
+  }));
+  updateSelBar();
 }
+
+function selAction(path, recreate, verb) {
+  const items = [...selected];
+  const names = items.map((i) => CLABEL[i] || i.replace("node:", "")).join("\n- ");
+  if (!confirm(`${verb}:\n- ${names}`)) return;
+  action(path, { items, recreate }, () => { selected.clear(); updateSelBar(); });
+}
+$("#btn-sel-deploy").onclick = () => selAction("/api/deploy/selected", false, "Uitrollen (bestaande worden overgeslagen)");
+$("#btn-sel-recreate").onclick = () => selAction("/api/deploy/selected", true, "Verwijderen en opnieuw uitrollen");
+$("#btn-sel-destroy").onclick = () => selAction("/api/destroy/selected", false, "Verwijderen");
+$("#btn-sel-clear").onclick = () => { selected.clear(); updateSelBar(); };
 
 // --- setup -----------------------------------------------------------------
 const fmtSize = (b) => (b > 1e9 ? (b / 1e9).toFixed(2) + " GB" : (b / 1e6).toFixed(1) + " MB");
@@ -239,7 +293,6 @@ $("#btn-host-test").onclick = async () => {
 
 // --- acties ----------------------------------------------------------------
 $("#btn-deploy").onclick = () => confirm("Volledig lab uitrollen op de Proxmox host?") && action("/api/deploy");
-$("#btn-provision").onclick = () => action("/api/provision");
 $("#btn-update").onclick = () => action("/api/update-sims");
 $("#btn-destroy").onclick = () => {
   if (!confirm("Alle lab-VM's en containers verwijderen?")) return;

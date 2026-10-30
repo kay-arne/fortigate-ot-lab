@@ -199,10 +199,22 @@
       <button id="btn-update-banner" class="primary">Simulators bijwerken</button>
     </div>
     <div class="toolbar">
-      <button id="btn-deploy" class="primary">Deploy lab</button>
-      <button id="btn-provision">FortiGate policies opnieuw toepassen</button>
+      <button id="btn-deploy" class="primary">Volledig lab uitrollen</button>
       <button id="btn-update">Simulators bijwerken</button>
-      <button id="btn-destroy" class="danger">Afbreken…</button>
+      <button id="btn-destroy" class="danger">Alles afbreken…</button>
+    </div>
+    <div class="selbar">
+      <div class="selinfo">
+        <b id="sel-count">Niets geselecteerd</b>
+        <span class="hint">Vink componenten aan om alleen die uit te rollen. Afhankelijkheden (bridges, template)
+          worden zo nodig meegenomen; de FortiGate krijgt na uitrol ook zijn policies.</span>
+      </div>
+      <div class="selactions">
+        <button id="btn-sel-deploy" class="primary" disabled title="Ontbrekende componenten uitrollen; bestaande worden overgeslagen">Uitrollen</button>
+        <button id="btn-sel-recreate" disabled title="Gekozen componenten verwijderen en opnieuw uitrollen">Opnieuw uitrollen</button>
+        <button id="btn-sel-destroy" class="danger" disabled>Verwijderen</button>
+        <button id="btn-sel-clear" class="ghost" disabled>Selectie wissen</button>
+      </div>
     </div>
     <div id="topology"></div>
   </section>

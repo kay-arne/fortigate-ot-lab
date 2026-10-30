@@ -193,6 +193,7 @@ def status():
         lab = {"fortigate": {"vmid": topo["fortigate"]["vmid"], "status": "unknown",
                              "name": f"{topo['lab']['name_prefix']}-{topo['fortigate']['name']}",
                              "wan": topo["fortigate"]["wan"], "api": False},
+               "template": {"vmid": template_vmid(topo), "status": "unknown"},
                "segments": [{**s, "present": False} for s in topo["segments"]],
                "nodes": [{**n, "status": "unknown"} for n in inventory(topo)]}
         err = str(e)
@@ -348,6 +349,32 @@ def update_sims():
 class Destroy(BaseModel):
     template: bool = False
     network: bool = False
+
+
+class Selection(BaseModel):
+    items: list[str]
+    recreate: bool = False
+
+
+def _check_items(items: list[str]) -> list[str]:
+    allowed = set(deployer.component_ids(load_topology()))
+    bad = [i for i in items if i not in allowed]
+    if bad or not items:
+        raise HTTPException(400, f"onbekende of geen componenten: {', '.join(bad) or '-'}")
+    return items
+
+
+@app.post("/api/deploy/selected")
+def deploy_selected(sel: Selection):
+    items = _check_items(sel.items)
+    title = ("Opnieuw uitrollen" if sel.recreate else "Uitrollen") + f" ({len(items)} componenten)"
+    return _start(title, deployer.deploy_selected, items, sel.recreate)
+
+
+@app.post("/api/destroy/selected")
+def destroy_selected(sel: Selection):
+    items = _check_items(sel.items)
+    return _start(f"Verwijderen ({len(items)} componenten)", deployer.destroy_selected, items)
 
 
 @app.post("/api/destroy")

@@ -387,6 +387,76 @@ def deploy_all(log):
     update_state(deployed=True, otsim_tree=updates.otsim_tree())
 
 
+def component_ids(topo) -> list[str]:
+    """Alle losse componenten, in uitrolvolgorde."""
+    return (["network", "fortigate", "template"] + [f"node:{n['name']}" for n in inventory(topo)]
+            + ["policies"])
+
+
+def _destroy_vmid(log, h, vmid, label):
+    kind = h.exists(vmid)
+    if not kind:
+        log(f"{label} ({vmid}) bestaat niet, overslaan")
+        return
+    tool = "qm" if kind == "qemu" else "pct"
+    log(f"{label} ({vmid}) verwijderen")
+    h.run([tool, "stop", str(vmid)], check=False)
+    h.run([tool, "destroy", str(vmid), "--purge", "1"], log=log)
+
+
+def destroy_selected(log, items):
+    topo = load_topology()
+    h = host()
+    items = set(items)
+    nodes = [n for n in inventory(topo) if f"node:{n['name']}" in items]
+    for n in nodes:
+        _destroy_vmid(log, h, n["vmid"], n["hostname"])
+    if "fortigate" in items:
+        _destroy_vmid(log, h, topo["fortigate"]["vmid"], vm_name(topo, topo["fortigate"]["name"]))
+        update_state(fgt_api_key=None, fgt_provisioned=False)
+    if "template" in items:
+        try:
+            _destroy_vmid(log, h, template_vmid(topo), vm_name(topo, "template"))
+        except HostError as e:
+            raise RuntimeError(f"template kan niet weg: {e}. Linked clones gebruiken het nog; "
+                               "verwijder eerst de containers die ervan gekloond zijn.") from None
+    if "network" in items:
+        lab_ids = [topo["fortigate"]["vmid"], template_vmid(topo)] + [n["vmid"] for n in inventory(topo)]
+        still = [v for v in lab_ids if h.exists(v)]
+        if still:
+            log(f"bridges niet verwijderd: nog {len(still)} lab-VM's/containers gebruiken ze")
+        else:
+            remove_bridges(log, topo)
+
+
+def deploy_selected(log, items, recreate=False):
+    """Alleen de gekozen componenten uitrollen. Afhankelijkheden (bridges, template)
+    worden zo nodig meegenomen; bestaande componenten worden overgeslagen, tenzij
+    recreate: dan worden ze eerst verwijderd."""
+    topo = load_topology()
+    items = set(items)
+    nodes = [n for n in inventory(topo) if f"node:{n['name']}" in items]
+    if recreate:
+        log("== gekozen componenten eerst verwijderen ==")
+        destroy_selected(log, items - {"network", "policies"})
+    if items & {"network", "fortigate"} or nodes:
+        log("== netwerksegmenten ==")
+        ensure_bridges(log, topo)
+    if "fortigate" in items:
+        log("== FortiGate ==")
+        deploy_fortigate(log, topo)
+    if "template" in items or nodes:
+        log("== LXC-template ==")
+        build_template(log, topo)
+    if nodes:
+        log(f"== {len(nodes)} container(s) ==")
+        for node in nodes:
+            deploy_node(log, topo, node)
+    if items & {"fortigate", "policies"}:
+        log("== FortiGate OT-policies ==")
+        fortigate.provision(log, topo)
+
+
 def destroy_all(log, remove_template=False, remove_net=False):
     topo = load_topology()
     h = host()
