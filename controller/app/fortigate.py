@@ -30,6 +30,11 @@ BOOTSTRAP_PASSWORD = "Deployment_Pass2026"
 ADMIN_TIMEOUT = 480
 
 
+def port_alias(seg) -> str:
+    """Alias van een segmentpoort; FortiOS staat maximaal 25 tekens toe."""
+    return (seg.get("alias") or seg["name"])[:25]
+
+
 def purdue_level(seg) -> str:
     """Purdue-level voor de segmentpoort. FortiOS 7.6 kent op interfaces geen
     level 0, dus L0 valt in L1; het testsegment speelt IT (L4)."""
@@ -79,7 +84,7 @@ def bootstrap_config(topo, state) -> str:
     for seg in topo["segments"]:
         lines += [
             f"    edit {seg['port']}",
-            f'        set alias "{seg["name"][:25]}"',
+            f'        set alias "{port_alias(seg)}"',
             "        set role lan",
             "        set mode static",
             f"        set ip {seg['gateway']} {netmask(seg['subnet'])}",
@@ -460,6 +465,24 @@ GUI_OT_FEATURES = {"gui-ot": "enable", "gui-virtual-patch-profile": "enable"}
 VPATCH_PROFILE = "OT-vpatch"
 
 
+def ensure_aliases(log, api, topo):
+    """Aliassen ook via de API zetten, zodat een bestaand lab ze krijgt zonder
+    nieuwe bootstrap; de bootstrap slaat een geweigerde alias stil over."""
+    failed = []
+    for seg in topo["segments"]:
+        alias = port_alias(seg)
+        try:
+            api.put(f"cmdb/system/interface/{seg['port']}", {"alias": alias})
+            got = api.get(f"cmdb/system/interface/{seg['port']}").get("results", [{}])
+            got = (got[0] if isinstance(got, list) and got else got or {}).get("alias")
+            if got != alias:
+                failed.append(seg["port"])
+        except (RuntimeError, requests.RequestException):
+            failed.append(seg["port"])
+    if failed:
+        log(f"⚠ alias niet gezet op {', '.join(failed)}")
+
+
 def enable_ot_features(log, api, topo) -> str | None:
     """Feature visibility voor OT, Purdue-level per segmentpoort en een virtual
     patching-profiel. Geeft de profielnaam terug als dat profiel bestaat."""
@@ -524,6 +547,7 @@ def provision(log, topo):
     ensure_admin_password(log, topo)
     api = Api(topo)
     suppress_setup_wizard(log, api)
+    ensure_aliases(log, api, topo)
     vpatch = enable_ot_features(log, api, topo)
     segs = segment_map(topo)
     nodes = {n["name"]: n for n in inventory(topo)}

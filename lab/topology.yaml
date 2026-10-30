@@ -67,6 +67,7 @@ segments:
     gateway: 10.0.0.1
   - id: test
     name: "Test Center (rogue / IT-simulatie)"
+    alias: "IT / Test Center"      # FortiGate-alias, max. 25 tekens
     purdue: "-"
     port: port7
     bridge: vmbr999
