@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 import asyncio
+import hashlib
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -35,10 +36,24 @@ async def require_login(request: Request, call_next):
     return RedirectResponse("/login", status_code=303)
 
 
+STATIC_REF = re.compile(r'(/static/[\w.-]+\.(?:css|js))"')
+NO_CACHE = {"Cache-Control": "no-cache"}
+
+
+def _page(name: str) -> str:
+    """HTML-template met ?v=<hash> achter de static-bestanden, zodat de browser
+    na een controller-update nooit een oude app.js/style.css gebruikt."""
+    def versioned(m):
+        digest = hashlib.sha1((HERE / m.group(1).lstrip("/")).read_bytes()).hexdigest()[:10]
+        return f'{m.group(1)}?v={digest}"'
+    return STATIC_REF.sub(versioned, (HERE / "templates" / name).read_text())
+
+
 def _login_page(error: str = "") -> HTMLResponse:
-    html = (HERE / "templates" / "login.html").read_text()
+    html = _page("login.html")
     block = f'<div class="login-error">{error}</div>' if error else ""
-    return HTMLResponse(html.replace("<!--ERROR-->", block), status_code=401 if error else 200)
+    return HTMLResponse(html.replace("<!--ERROR-->", block), status_code=401 if error else 200,
+                        headers=NO_CACHE)
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -68,7 +83,7 @@ def logout():
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return (HERE / "templates" / "index.html").read_text()
+    return HTMLResponse(_page("index.html"), headers=NO_CACHE)
 
 
 # --- status & instellingen -----------------------------------------------
