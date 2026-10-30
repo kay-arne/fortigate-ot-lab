@@ -470,7 +470,7 @@ class Adhoc(BaseModel):
     command: str
 
 
-ADHOC_ALLOWED = re.compile(r"^(scan|tcp|modbus-read|modbus-write|s7-read|s7-stop|s7-start|opcua-browse|http)\b[\w .,:/=-]*$")
+ADHOC_ALLOWED = re.compile(r"^(scan|tcp|modbus-read|modbus-write|s7-read|s7-stop|s7-start|opcua-browse|http|shellshock)\b[\w .,:/=-]*$")
 
 
 @app.post("/api/adhoc")

@@ -312,8 +312,9 @@ async function loadScenarios() {
     const res = r ? `<span class="res ${r.passed ? "pass" : "fail"}">${r.passed ? "PASS" : "FAIL"}</span> (${esc(r.outcome)})` : "-";
     const ev = r && r.evidence.length
       ? r.evidence.slice(0, 3).map((e) => `<div class="ev">${esc(e.type)}: ${esc(e.action)} · ${esc(e.policy)} ${e.app ? "· " + esc(e.app) : ""}${e.attack ? " · " + esc(e.attack) : ""}</div>`).join("")
-      : "";
-    html += `<tr><td><b>${esc(s.title)}</b><div class="why">${esc(s.why)}</div><div class="ev">otprobe ${esc(s.run)}</div></td>
+      : r && typeof r.detail === "string" ? `<div class="ev">${esc(r.detail)}</div>` : "";
+    const manual = s.manual ? ` <span class="tag warn">demo, niet in 'alle tests'</span>` : "";
+    html += `<tr><td><b>${esc(s.title)}</b>${manual}<div class="why">${esc(s.why)}</div><div class="ev">${s.check ? "controller:" : "otprobe"} ${esc(s.run)}</div></td>
       <td>${esc(s.from)}</td><td>${esc(s.expect)}</td><td>${res}</td><td>${ev}</td>
       <td><button data-run="${esc(s.id)}">Run</button></td></tr>`;
   });

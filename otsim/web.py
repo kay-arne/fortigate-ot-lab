@@ -53,10 +53,18 @@ def run_hmi(cfg):
     threading.Thread(target=poll, daemon=True).start()
     app = Flask(__name__)
 
+    def status(ip, v):
+        if not v["ok"]:
+            return "COMM FAULT"
+        # tank-PLC: HR0 niveau (%), HR1 setpoint; boven 95% loopt de tank over
+        if ip == args.get("tank") and v["regs"] and v["regs"][0] >= 95:
+            return "<b style='color:#ff5a4f'>ALARM: TANK LOOPT OVER</b>"
+        return "OK"
+
     @app.get("/")
     def index():
         rows = "".join(
-            f"<tr><td>{ip}</td><td>{'OK' if v['ok'] else 'COMM FAULT'}</td><td>{v['regs']}</td>"
+            f"<tr><td>{ip}</td><td>{status(ip, v)}</td><td>{v['regs']}</td>"
             f"<td><form method=post action=/setpoint><input type=hidden name=ip value={ip}>"
             f"<input name=value size=5><button>Setpoint (HR1)</button></form></td></tr>"
             for ip, v in values.items())

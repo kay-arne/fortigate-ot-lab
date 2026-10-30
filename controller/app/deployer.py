@@ -5,6 +5,7 @@ import json
 import re
 import shlex
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -235,7 +236,9 @@ def push_otsim(log, vmid):
 
 def sync_packages(log, node):
     """Python-pakketten in een draaiende container op de vastgezette versies
-    brengen; containers van een ouder template houden anders oude versies."""
+    brengen; containers van een ouder template houden anders oude versies.
+    De OT-segmenten hebben geen internet: de controller (ook Debian 12 /
+    Python 3.11) haalt de wheels op en zet ze via de host in de container."""
     h = host()
     _, frozen = h.pct_exec(node["vmid"], "/opt/otsim/venv/bin/pip freeze")
     installed = {l.strip().lower() for l in frozen.splitlines()}
@@ -243,10 +246,22 @@ def sync_packages(log, node):
     if not missing:
         return
     log(f"{node['hostname']}: pakketten bijwerken ({' '.join(missing)})")
-    rc, out = h.pct_exec(node["vmid"], f"/opt/otsim/venv/bin/pip install -q {' '.join(missing)}", timeout=600)
+    wheels = Path(tempfile.mkdtemp(prefix="wheels-"))
+    dl = subprocess.run([sys.executable, "-m", "pip", "download", "-q", "--no-deps", "--only-binary=:all:",
+                         "-d", str(wheels), *missing], capture_output=True, text=True)
+    if dl.returncode != 0:
+        log(f"⚠ wheels downloaden mislukt; rol het LXC-template opnieuw uit. {dl.stderr.strip()[-200:]}")
+        return
+    tgz = wheels / "wheels.tgz"
+    with tarfile.open(tgz, "w:gz") as tar:
+        for whl in wheels.glob("*.whl"):
+            tar.add(whl, arcname=whl.name)
+    h.put(tgz, f"{h.workdir}/wheels.tgz")
+    h.run(["pct", "push", str(node["vmid"]), f"{h.workdir}/wheels.tgz", "/tmp/wheels.tgz"])
+    rc, out = h.pct_exec(node["vmid"], "rm -rf /tmp/wheels && mkdir /tmp/wheels && tar xzf /tmp/wheels.tgz -C /tmp/wheels "
+                                       "&& /opt/otsim/venv/bin/pip install -q --no-index --no-deps /tmp/wheels/*.whl")
     if rc != 0:
-        log(f"⚠ {node['hostname']}: pip install mislukt (geen internet in dit segment?); "
-            f"rol het LXC-template opnieuw uit. {out.strip()[-200:]}")
+        log(f"⚠ {node['hostname']}: pakketten installeren mislukt; rol het LXC-template opnieuw uit. {out.strip()[-200:]}")
 
 
 def _is_template(h, vmid) -> bool:
@@ -361,6 +376,21 @@ def network_diagnosis(h, vmid) -> list[str]:
 # --------------------------------------------------------------------------
 # devices + probes
 # --------------------------------------------------------------------------
+def node_mac(node) -> str:
+    """Vast MAC-adres per IP: 02:4F:54 ('OT', locally administered) + de laatste
+    drie octetten. Zo blijft een device na een herinstallatie hetzelfde asset op
+    de FortiGate in plaats van een nieuw MAC naast het oude."""
+    o = [int(x) for x in node["ip"].split(".")]
+    return "02:4F:54:" + ":".join(f"{x:02X}" for x in o[1:])
+
+
+def write_node_config(node):
+    """/etc/otsim.json: rol en argumenten van de simulator uit de topologie."""
+    cfg = json.dumps({"name": node["name"], "role": node["role"], "ip": node["ip"],
+                      "segment": node["segment"], "args": node["args"]})
+    host().pct_exec(node["vmid"], f"echo {shlex.quote(cfg)} > /etc/otsim.json", check=True)
+
+
 def deploy_node(log, topo, node):
     h = host()
     segs = segment_map(topo)
@@ -378,17 +408,17 @@ def deploy_node(log, topo, node):
         log("  linked clone niet mogelijk op deze storage, full clone")
         h.run(["pct", "clone", str(tpl), str(vmid), "--hostname", node["hostname"], "--full", "1"])
     h.run(["pct", "set", str(vmid),
-           "--net0", f"name=eth0,bridge={seg['bridge']},ip={node['ip']}/{prefixlen(seg['subnet'])},gw={seg['gateway']}",
+           "--net0", f"name=eth0,bridge={seg['bridge']},hwaddr={node_mac(node)},"
+                     f"ip={node['ip']}/{prefixlen(seg['subnet'])},gw={seg['gateway']}",
            "--cores", str(res["cores"]), "--memory", str(res["memory"]),
            "--nameserver", seg["gateway"],
            "--tags", f"otlab;{node['segment']};{node['kind']}",
            "--description", f"otlab {node['kind']} role={node['role']}"])
     h.run(["pct", "start", str(vmid)])
     time.sleep(2)
-    cfg = json.dumps({"name": node["name"], "role": node["role"], "ip": node["ip"],
-                      "segment": node["segment"], "args": node["args"]})
-    h.pct_exec(vmid, f"dpkg-reconfigure -f noninteractive openssh-server >/dev/null 2>&1; "
-                     f"systemd-machine-id-setup >/dev/null; echo {shlex.quote(cfg)} > /etc/otsim.json", check=True)
+    h.pct_exec(vmid, "dpkg-reconfigure -f noninteractive openssh-server >/dev/null 2>&1; "
+                     "systemd-machine-id-setup >/dev/null", check=True)
+    write_node_config(node)
     sync_packages(log, node)
     if node["kind"] == "device":
         h.pct_exec(vmid, "systemctl enable --now otsim", check=True)
@@ -448,6 +478,7 @@ def update_simulators(log):
             log(f"otsim bijwerken op {node['hostname']}")
             push_otsim(log, node["vmid"])
             sync_packages(log, node)
+            write_node_config(node)
             if node["kind"] == "device":
                 host().pct_exec(node["vmid"], "systemctl restart otsim")
             setup_access(log, node)

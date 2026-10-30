@@ -118,7 +118,7 @@ geen harde sandbox. Kies je in de wizard voor root, dan komt de sleutel in
 |---|---|
 | `install.sh` | oneliner-installer voor de Proxmox host |
 | `lab/topology.yaml` | segmenten, IP-plan, devices, VMID's: pas hier het lab aan |
-| `lab/scenarios.yaml` | validatietests (segmentatie, OT deep inspection, zichtbaarheid) |
+| `lab/scenarios.yaml` | validatietests (segmentatie, remote access, OT deep inspection, uitbraak naar internet, zichtbaarheid) en demo's |
 | `controller/` | web UI, Proxmox-orchestratie, FortiGate-provisioning, testcenter |
 | `otsim/` | OT-simulators + `otprobe` testtool (draait in elke LXC) |
 

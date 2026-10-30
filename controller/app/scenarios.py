@@ -8,10 +8,12 @@ import time
 from collections import defaultdict
 from urllib.parse import urlparse
 
+import paramiko
 import yaml
 
-from . import fortigate
-from .config import SCENARIO_FILE, get_state, inventory, load_topology, update_state
+from . import deployer, fortigate
+from .config import (SCENARIO_FILE, contractor_credentials, get_state, inventory, load_topology, segment_map,
+                     update_state)
 from .hostctl import host
 
 PROBE_CMD = "/opt/otsim/venv/bin/python -m otsim.probe"
@@ -70,16 +72,20 @@ def run_scenario(log, scenario_id: str):
 def _run_scenario(log, sc: dict):
     topo = load_topology()
     log(f"[{sc['id']}] {sc['title']}")
-    log(f"  vanaf {sc['from']}: otprobe {sc['run']}")
     started = time.time()
-    res = run_command(sc["from"], sc["run"], timeout=sc.get("timeout", 120))
+    if sc.get("check"):
+        log(f"  controller: {sc['run']}")
+        res = CHECKS[sc["check"]](log, topo)
+    else:
+        log(f"  vanaf {sc['from']}: otprobe {sc['run']}")
+        res = run_command(sc["from"], sc["run"], timeout=sc.get("timeout", 120))
     outcome = "allowed" if res.get("ok") else "blocked"
     passed = outcome == sc["expect"]
     log(f"  resultaat: {outcome} (verwacht {sc['expect']}) -> {'PASS' if passed else 'FAIL'}")
     log(f"  detail: {res.get('detail')}")
 
     evidence = []
-    if get_state().get("fgt_api_key"):
+    if get_state().get("fgt_api_key") and res.get("srcip") and sc.get("logs"):
         # Een toegestane sessie wordt pas gelogd als hij sluit, soms seconden later.
         deadline = time.time() + 15
         time.sleep(4)
@@ -122,8 +128,78 @@ def _collect_evidence(topo, sc: dict, srcip: str, started: float) -> list[dict]:
     return evidence
 
 
+# --------------------------------------------------------------------------
+# checks die de controller zelf uitvoert (scenario's met 'check:')
+# --------------------------------------------------------------------------
+def check_assets(log, topo) -> dict:
+    """Herkent de FortiGate elk device, en in de juiste Purdue-laag?"""
+    devices = fortigate.asset_inventory(topo)
+    by_mac = {(d.get("mac") or "").lower(): d for d in devices}
+    by_ip = {d["ipv4_address"]: d for d in devices if d.get("ipv4_address") and d.get("is_online")}
+    segs = segment_map(topo)
+    nodes = [n for n in inventory(topo) if n["kind"] == "device"]
+    missing, wrong = [], []
+    for n in nodes:
+        d = by_mac.get(deployer.node_mac(n).lower()) or by_ip.get(n["ip"])
+        want = fortigate.purdue_level(segs[n["segment"]])
+        if not d:
+            missing.append(n["name"])
+        elif str(d.get("purdue_level")) != want:
+            wrong.append(f"{n['name']} L{d.get('purdue_level')} i.p.v. L{want}")
+    detail = (f"{len(nodes) - len(missing)}/{len(nodes)} devices herkend"
+              + (f"; niet gezien: {', '.join(missing)}" if missing else "")
+              + (f"; verkeerde laag: {', '.join(wrong)}" if wrong else ""))
+    return {"ok": not missing and not wrong, "detail": detail, "srcip": None}
+
+
+def check_contractor_login(log, topo) -> dict:
+    """Inloggen als de contractor via de VIP op de WAN-poort, zoals de kandidaat doet."""
+    user, pw = contractor_credentials()
+    ip = fortigate.mgmt_ip(topo)
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(ip, port=2222, username=user, password=pw, timeout=10,
+                       allow_agent=False, look_for_keys=False)
+        src = client.get_transport().sock.getsockname()[0]
+        _, out, _ = client.exec_command("hostname", timeout=10)
+        return {"ok": True, "detail": f"ingelogd als {user} op {out.read().decode().strip()}", "srcip": src}
+    except (paramiko.SSHException, OSError) as e:
+        return {"ok": False, "detail": f"{ip}:2222 - {e}", "srcip": None}
+    finally:
+        client.close()
+
+
+BREAK_POLICY = "L3->L1 Modbus read-only"
+BREAK_SECONDS = 60
+
+
+def check_break_readonly(log, topo) -> dict:
+    """'Breek het': de write-blokkade even uitzetten en Ghost het setpoint laten
+    verzetten. Policy en setpoint worden daarna altijd hersteld."""
+    before = fortigate.policy_app_list(topo, BREAK_POLICY, "OT-monitor")
+    log(f"  policy '{BREAK_POLICY}': {before} -> OT-monitor, schrijven wordt niet meer geblokkeerd")
+    try:
+        res = run_command("probe-ops", "modbus-write 10.10.0.10 1 999")
+        if res.get("ok"):
+            log(f"  tank-setpoint staat op 999: kijk {BREAK_SECONDS} s in de SCADA HMI hoe de tank overloopt")
+            time.sleep(BREAK_SECONDS)
+    finally:
+        fortigate.policy_app_list(topo, BREAK_POLICY, before or "")
+        log(f"  policy hersteld naar {before}")
+        hmi = run_command("scada-hmi", "modbus-write 10.10.0.10 1 50")
+        log(f"  setpoint via de HMI terug naar 50: {'ok' if hmi.get('ok') else hmi.get('detail')}")
+    return res
+
+
+CHECKS = {"assets": check_assets, "contractor-login": check_contractor_login,
+          "break-readonly": check_break_readonly}
+
+
 def run_all(log):
     for sc in load():
+        if sc.get("manual"):
+            continue  # demo's die de FortiGate-config tijdelijk wijzigen
         try:
             run_scenario(log, sc["id"])
         except Exception as e:  # noqa: BLE001 - door met de volgende test

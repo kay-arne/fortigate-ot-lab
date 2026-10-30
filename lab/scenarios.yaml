@@ -6,6 +6,10 @@
 #   expect: blocked  -> de FortiGate moet de actie tegenhouden
 # Daarna haalt de controller de FortiGate-logs (traffic / app-ctrl / ips) op
 # voor het bron-IP, zodat je ziet *welke* policy of signature ingreep.
+#
+# Met 'check:' voert de controller zelf de test uit in plaats van otprobe
+# (inloggen via de VIP, de asset-lijst controleren). 'manual: true' slaat
+# 'Alle tests draaien' over: zo'n demo wijzigt tijdelijk de FortiGate-config.
 
 scenarios:
   # --- Segmentatie (IEC 62443 zones & conduits) ---------------------------
@@ -64,6 +68,35 @@ scenarios:
     why: "Alleen PLC's en de EWS praten met L0."
     logs: [traffic/forward]
 
+  # --- Remote access via de DMZ (hoofdstuk 3) ----------------------------
+  - id: contractor-login
+    group: Remote access
+    title: "Remco logt in via de VIP op de WAN-poort"
+    from: controller
+    check: contractor-login
+    run: "ssh -p 2222 remco@<WAN-IP>"
+    expect: allowed
+    why: "Eén ingang van buiten: de VIP naar de jump host, met een eigen account."
+    logs: [traffic/forward]
+
+  - id: jump-to-ews
+    group: Remote access
+    title: "Jump host naar de engineering workstation"
+    from: dmz-jump
+    run: "tcp 10.20.0.30 22"
+    expect: allowed
+    why: "Conduit 'DMZ jump -> L2 EWS': de volgende hop van Remco."
+    logs: [traffic/forward]
+
+  - id: jump-to-plc
+    group: Remote access
+    title: "Jump host probeert direct een PLC"
+    from: dmz-jump
+    run: "modbus-read 10.10.0.10 0 4"
+    expect: blocked
+    why: "Vanaf de DMZ alleen via de EWS; geen doorsteek naar L1."
+    logs: [traffic/forward]
+
   # --- OT-protocol deep inspection (application control) ------------------
   - id: l3-modbus-read
     group: OT deep inspection
@@ -119,6 +152,45 @@ scenarios:
     why: "EWS heeft het engineering-conduit naar L1."
     logs: [app-ctrl]
 
+  - id: shellshock-mes
+    group: OT deep inspection
+    title: "Ghost valt de MES-webinterface aan (Shellshock)"
+    from: dmz-jump
+    run: "shellshock http://10.30.0.20/"
+    expect: blocked
+    why: "Toegestane HTTP-conduit, maar de IPS herkent de exploit: virtual patching voor een ongepatcht systeem."
+    logs: [ips]
+
+  - id: break-readonly
+    group: OT deep inspection
+    title: "Breek het: write-blokkade 60 s uit, Ghost zet het setpoint"
+    from: probe-ops
+    check: break-readonly
+    manual: true
+    run: "OT-readonly -> OT-monitor; modbus-write 10.10.0.10 1 999; herstel"
+    expect: allowed
+    why: "Demo: zonder de write-blokkade loopt de tank over. Policy en setpoint worden daarna hersteld."
+    logs: [app-ctrl]
+
+  # --- Uitbraak naar internet ---------------------------------------------
+  - id: plc-to-internet
+    group: Uitbraak naar internet
+    title: "Tank-PLC probeert naar huis te bellen"
+    from: plc-tank
+    run: "tcp 1.1.1.1 443"
+    expect: blocked
+    why: "OT-devices hebben geen internet; een C2-verbinding loopt dood op de implicit deny."
+    logs: [traffic/forward]
+
+  - id: patch-to-internet
+    group: Uitbraak naar internet
+    title: "Patch-server haalt updates op"
+    from: dmz-patch
+    run: "tcp 1.1.1.1 443"
+    expect: allowed
+    why: "Alleen de patch-server in de DMZ mag naar buiten (HTTP/HTTPS/DNS)."
+    logs: [traffic/forward]
+
   # --- Zichtbaarheid -------------------------------------------------------
   - id: historian-opcua
     group: Zichtbaarheid
@@ -128,3 +200,12 @@ scenarios:
     expect: allowed
     why: "Legitieme data-flow L3 <- L2, zichtbaar als OPC UA in application control."
     logs: [app-ctrl]
+
+  - id: asset-inventory
+    group: Zichtbaarheid
+    title: "FortiGate herkent elk device, in de juiste laag"
+    from: controller
+    check: assets
+    run: "Asset Identity Center vergelijken met de topologie"
+    expect: allowed
+    why: "Elk device uit de topologie staat in de asset-lijst, met het Purdue-level van zijn segment."

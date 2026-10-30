@@ -658,6 +658,23 @@ def provision(log, topo):
 # --------------------------------------------------------------------------
 # logs voor de testcenter-validatie
 # --------------------------------------------------------------------------
+def asset_inventory(topo) -> list[dict]:
+    """Devices die de FortiGate heeft herkend (Asset Identity Center)."""
+    return Api(topo).get("monitor/user/device/query").get("results", [])
+
+
+def policy_app_list(topo, name: str, profile: str | None = None) -> str | None:
+    """Application-list-profiel van een policy (op naam); met profile wordt het gezet.
+    Geeft het profiel van vóór de wijziging terug."""
+    api = Api(topo)
+    found = api.get("cmdb/firewall/policy", filter=f"name=={name}").get("results", [])
+    if not found:
+        raise RuntimeError(f"policy '{name}' niet gevonden")
+    if profile is not None:
+        api.put(f"cmdb/firewall/policy/{found[0]['policyid']}", {"application-list": profile})
+    return found[0].get("application-list") or None
+
+
 def query_logs(topo, kind: str, srcip: str, since: float, rows=50, dstip: str | None = None) -> list[dict]:
     """kind: traffic/forward | app-ctrl | ips. Meerdere filters zijn een AND."""
     api = Api(topo)

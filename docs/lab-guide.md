@@ -6,7 +6,7 @@ Een verhalende rondgang door het FortiGate OT Lab. Elk hoofdstuk is een scène u
 
 - Doelgroep: engineers, securityteams en klanten die willen zien wat een FortiGate
   in een OT-netwerk doet.
-- Duur: ongeveer 100 minuten voor alle hoofdstukken; hoofdstuk 0 t/m 2 zijn ook los
+- Duur: ongeveer 120 minuten voor alle hoofdstukken; hoofdstuk 0 t/m 2 zijn ook los
   als demo van 20 minuten te geven.
 - Voorbereiding: het lab is volledig uitgerold en in de Lab-tab staat alles op groen
   (FortiGate-kaart groen = REST API antwoordt).
@@ -143,12 +143,19 @@ hebben we, en wie praat ermee?" Er is geen assetlijst.*
 
 - Vraag de groep: welk device staat in de "verkeerde" laag? Pas het level van één
   asset handmatig aan en laat zien dat een handmatige keuze voorgaat op die van de poort.
+- Testcenter: **FortiGate herkent elk device, in de juiste laag** (`asset-inventory`).
+  De controller legt de asset-lijst van de FortiGate naast de topologie en meldt
+  welke devices niet gezien zijn of in een andere laag staan. Draai hem ook vóór de
+  andere tests: een device dat nog geen verkeer maakte, ziet de FortiGate niet.
 
 **Onthulling**
 - Mark krijgt zijn assetlijst, en meteen per Purdue-laag gesorteerd: de PLC's in
   L1, de HMI, OPC UA-gateway en EWS in L2, de historian en het MES in L3.
 - De FortiGate herkent de OT-protocollen aan de inhoud van het verkeer. Het
   OT-monitor-profiel blokkeert niets, maar logt alles.
+- Elk device heeft een vast MAC-adres dat zijn IP-adres bevat (`02:4F:54:10:00:0A`
+  is 10.10.0.10). Na een herinstallatie blijft het hetzelfde asset; in een echte
+  fabriek is dat vanzelfsprekend, in een lab moet je het regelen.
 
 **Les**
 - Zichtbaarheid komt eerst: je kunt niet beschermen wat je niet ziet.
@@ -196,8 +203,11 @@ Vroeger had hij een TeamViewer-sessie rechtstreeks op de EWS.*
 2. Probeer vanaf de jump host direct een PLC: `otprobe modbus-read 10.10.0.10 0 4`.
 3. Ga door naar de EWS: `ssh remco@10.20.0.30`.
 4. Lees vanaf de EWS de S7-menger uit: `otprobe s7-read 10.10.0.20`.
-5. Ter controle in het Testcenter: **Remote access via DMZ jump host**
-   (`remote-access`) en **DMZ-host probeert L1 direct te bereiken** (`dmz-bypass`).
+5. Ter controle in het Testcenter, groep *Remote access*:
+   - **Remco logt in via de VIP op de WAN-poort** (`contractor-login`): de
+     controller logt zelf in zoals jij in stap 1;
+   - **Jump host naar de engineering workstation** (`jump-to-ews`): stap 3;
+   - **Jump host probeert direct een PLC** (`jump-to-plc`): stap 2.
 
 **Onthulling**
 - Stap 1 gaat door de VIP (WAN :2222 naar 22), stap 3 door de conduit "DMZ jump → L2 EWS".
@@ -250,6 +260,22 @@ de doorgelaten en geblokkeerde Industrial-applicaties.
 
 ![Security Events met de signatures aan: links de Industrial-applicaties, rechts honderden read- en write-meldingen op normaal verkeer](img/fgt-security-events.jpg)
 
+**Voor en na: breek het**
+
+*"Maar wat als die blokkade er niet was?", vraagt Mark.*
+
+- Open de **SCADA HMI** in het kijkvenster en houd hem in beeld.
+- Draai **Breek het: write-blokkade 60 s uit, Ghost zet het setpoint**
+  (`break-readonly`). Deze demo zit niet in *Alle tests draaien*, omdat hij de
+  FortiGate-config tijdelijk wijzigt.
+- De controller zet op de policy `L3->L1 Modbus read-only` het profiel
+  `OT-readonly` om naar `OT-monitor`. Ghost schrijft vanaf L3 setpoint 999 naar de
+  tank-PLC, en de pomp blijft draaien. Binnen een minuut toont de HMI
+  **ALARM: TANK LOOPT OVER**.
+- Na 60 seconden zet de controller de policy terug en het setpoint via de HMI op 50.
+  Draai daarna **L3 schrijft een Modbus-setpoint** (`l3-modbus-write`) nog eens:
+  die is weer geblokkeerd.
+
 **Les**
 - Poortfiltering is niet genoeg: dezelfde poort draagt zowel "kijken" als "ingrijpen".
 - Deep packet inspection op OT-protocollen maakt *least privilege* per functie mogelijk.
@@ -289,12 +315,31 @@ PLC's en de EWS mogen bij L0.
 - Verkeer volgt het Purdue-model: bekende richtingen en bekende partners, de rest is deny.
 - Segmentatie beperkt de *blast radius*: één besmet device is niet meteen de hele fabriek.
 
+**Naar huis bellen**
+
+*02:30. Op de tank-PLC draait malware die contact zoekt met de server van Ghost.*
+
+**Actie** (Testcenter, groep *Uitbraak naar internet*)
+- **Tank-PLC probeert naar huis te bellen** (`plc-to-internet`): HTTPS naar 1.1.1.1.
+- **Patch-server haalt updates op** (`patch-to-internet`): hetzelfde, vanaf de DMZ.
+
+**Onthulling**
+De PLC komt niet buiten: er is geen policy van L1 naar de WAN, dus de implicit
+deny logt de poging. Alleen de patch-server in de DMZ mag naar buiten, en alleen
+voor HTTP, HTTPS en DNS.
+
+**Les**
+- Uitgaand verkeer is net zo belangrijk als inkomend: een geblokkeerde C2-verbinding
+  maakt een besmetting een stuk minder gevaarlijk, en de log is je alarmbel.
+- Updates halen loopt via één server in de DMZ, niet vanaf elk device apart.
+
 ## Hoofdstuk 7: Het lek dat niet dicht kan
 
-*03:00. Sanne leest een security-advisory: de firmware van de tank-PLC heeft een
-bekende kwetsbaarheid. De leverancier heeft een update, maar die vraagt een
-herstart van de PLC en een hertest van het proces. "Dat kan pas bij de
-zomerstop", zegt Sanne. "Tot die tijd draait deze PLC zoals hij draait."*
+*03:00. Sanne leest een security-advisory: de webinterface van het MES draait op
+een oud embedded Linux met het Bash-lek Shellshock. De leverancier heeft een
+update, maar die vraagt een herinstallatie en een hertest van de batchrecepten.
+"Dat kan pas bij de zomerstop", zegt Sanne. Ghost zit nog steeds op de jump host,
+en die mag over HTTP bij het MES.*
 
 **Voorspel**: hoe bescherm je een systeem dat je maanden niet mag patchen?
 
@@ -312,15 +357,20 @@ zomerstop", zegt Sanne. "Tot die tijd draait deze PLC zoals hij draait."*
 
 ![Firewall-policies per Purdue-conduit, met IPS en virtual patching](img/fgt-policies.jpg)
 
-- Koppel het terug aan hoofdstuk 4: welk verkeer mag überhaupt bij de tank-PLC
-  komen? Alleen de HMI, de EWS, de OPC UA-gateway en (lezend) L3. Virtual patching
-  inspecteert juist dat toegestane verkeer.
+- Testcenter: **Ghost valt de MES-webinterface aan (Shellshock)** (`shellshock-mes`).
+  Vanaf de jump host gaat een gewone HTTP-request naar 10.30.0.20, met in de
+  `User-Agent` de Shellshock-payload. De conduit "DMZ jump → L3 MES" staat HTTP toe.
+- Bekijk in *Log & Report > Security Events* de Intrusion Prevention-log:
+  `Bash.Function.Definitions.Remote.Code.Execution`, actie *dropped*.
+- Koppel het terug aan hoofdstuk 4: welk verkeer mag überhaupt bij een kwetsbaar
+  systeem komen? Virtual patching inspecteert juist dat toegestane verkeer.
 
 **Onthulling**
-De aanval hoeft de PLC niet meer te bereiken: de FortiGate staat ervoor en
-herkent het misbruik van de kwetsbaarheid in het verkeer, ook als dat over een
-toegestane conduit komt. De PLC blijft ongepatcht, maar is niet meer kwetsbaar
-vanuit het netwerk.
+De firewall-policy laat de verbinding toe, maar de payload bereikt het MES niet:
+de FortiGate herkent het misbruik van de kwetsbaarheid in het verkeer en gooit
+de sessie weg. Het MES blijft ongepatcht, maar is niet meer kwetsbaar vanuit het
+netwerk. Voor de PLC's werkt het net zo, met de OT-signatures uit de Industrial
+Security Service.
 
 **Les**
 - In OT is patchen vaak maanden weg; virtual patching overbrugt die periode.
@@ -329,9 +379,10 @@ vanuit het netwerk.
 - Virtual patching vervangt de echte patch niet: plan hem alsnog in voor de stop.
 - IEC 62443: FR3 *system integrity* en het patchmanagement uit 62443-2-3.
 
-> Een demo waarin Ghost de kwetsbaarheid echt aanvalt en het profiel ziet
-> ingrijpen, zit nog niet in het lab (zie *Uitbreidingen*). Dit hoofdstuk laat
-> daarom de inrichting zien en waarom die werkt.
+> De demo gebruikt Shellshock omdat die signature betrouwbaar afgaat op één
+> HTTP-header. De FortiGuard-database van dit lab bevat voor Modbus en S7 alleen
+> policy-signatures (zoals in hoofdstuk 4), geen exploit-signatures die je met
+> een simpele request kunt laten afgaan.
 
 ## Afsluiting: het rapport voor Mark
 
@@ -340,7 +391,8 @@ wil voor het managementoverleg één overzicht.*
 
 **Actie**
 - Draai in het Testcenter **alle tests**. Elke test is groen als de uitkomst
-  overeenkomt met de verwachting (toegestaan of geblokkeerd).
+  overeenkomt met de verwachting (toegestaan of geblokkeerd). De demo
+  `break-readonly` wordt daarbij overgeslagen.
 - Loop de resultaten langs met de logs als bewijs.
 
 ![Testcenter: per test de verwachting, de uitkomst en de bijbehorende FortiGate-logregels](img/02-testcenter.jpg)
@@ -354,23 +406,15 @@ wil voor het managementoverleg één overzicht.*
 | 3 | Remote access via één gecontroleerd punt | FR1, FR5 |
 | 4 | Lezen ja, schrijven nee op dezelfde poort | FR2, FR3 |
 | 5 | Engineering-acties alleen vanaf de EWS | FR2 |
-| 6 | Geen lateral movement tussen lagen | FR5 |
-| 7 | Ongepatchte PLC beschermd door virtual patching | FR3 |
+| 6 | Geen lateral movement tussen lagen, geen uitbraak naar internet | FR5 |
+| 7 | Ongepatcht systeem beschermd door virtual patching | FR3 |
 
 ---
 
 ## Uitbreidingen (nog niet in het lab)
 
-Deze scènes passen in het verhaal, maar vragen nog bouwwerk:
-
-- **"Breek het"**: zet de write-blokkade tijdelijk uit en laat zien hoe Ghost de
-  tank laat overlopen (het procesmodel en de HMI tonen het effect). Een sterke
-  voor/na-demo.
-- **Virtual patching in actie** (hoofdstuk 7): Ghost valt de kwetsbare PLC echt
-  aan en het profiel `OT-vpatch` grijpt in. Het profiel en de IPS-sensor staan er al;
-  een `otprobe`-commando dat een herkend aanvalspatroon stuurt nog niet. Welke
-  signature betrouwbaar triggert, moet op een FortiGate met OT-licentie uitgezocht worden.
-- **Asset inventory als test**: het Testcenter laten controleren dat de FortiGate
-  alle devices herkent.
-- **Uitbraak naar internet**: alleen de patch-server in de DMZ mag naar buiten;
-  laat een PLC proberen naar huis te bellen (C2).
+- **MFA en sessie-opname op de jump host** (hoofdstuk 3), bijvoorbeeld met
+  FortiAuthenticator of FortiPAM.
+- **Virtual patching op een OT-exploit** (hoofdstuk 7): zodra de FortiGuard-database
+  een Modbus- of S7-exploitsignature bevat die met één request af te laten gaan is,
+  kan `shellshock-mes` een OT-variant krijgen.
