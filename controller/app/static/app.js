@@ -342,7 +342,9 @@ async function loadAccess() {
         <tr><th>Daarna EWS</th><td><code>ssh ${esc(a.user)}@${esc(a.ews_ip)}</code></td></tr>
         <tr><th>Wachtwoord</th><td>${secretRow("acc-pw", a.password)}</td></tr>
         <tr><th>MFA-code</th><td><span class="mono" id="acc-totp">${esc(a.totp_code)}</span>
-          <span class="hint">alleen jump host; of zet geheim <span class="mono">${esc(a.totp_secret)}</span> in een authenticator-app</span></td></tr></table>
+          <span class="hint">alleen jump host, wisselt elke 30 s</span></td></tr>
+        <tr><th>MFA-geheim</th><td>${secretRow("acc-totp-secret", a.totp_secret)}
+          <span class="hint">voor een authenticator-app</span></td></tr></table>
       <p class="hint">Op beide machines staat <code>otprobe</code>, bijv. <code>otprobe s7-read 10.10.0.20</code>.</p>
       <div class="row"><button class="ghost" id="btn-recordings">Sessie-opnames jump host</button></div></div>
     <div class="acc"><h3>3. Op de vloer <span class="tag">via Proxmox</span></h3>
