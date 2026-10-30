@@ -26,6 +26,8 @@ API_USER = "otlab-controller"
 # tekens die in cloud-init of de FortiOS-CLI quoting nodig hebben. Tijdens de
 # provisioning vervangt de controller het door het wachtwoord uit de UI.
 BOOTSTRAP_PASSWORD = "Deployment_Pass2026"
+# Lab: zo lang mogelijk ingelogd blijven in de GUI (FortiOS-maximum, minuten).
+ADMIN_TIMEOUT = 480
 
 
 # --------------------------------------------------------------------------
@@ -37,7 +39,7 @@ def bootstrap_config(topo, state) -> str:
     lines = [
         "config system global",
         f'    set hostname "{vm_name(topo, fgt["name"])}"',
-        "    set admintimeout 60",
+        f"    set admintimeout {ADMIN_TIMEOUT}",
         f"    set admin-sport {fgt.get('admin_https_port', 443)}",
         "end",
         # geen --More--: de controller leest CLI-output over SSH
@@ -410,7 +412,8 @@ def ensure_admin_password(log, topo):
 # GUI-wizard bij de eerste login (FortiCare-registratie, FortiConverter, patch-
 # upgrades, dashboard). Niet elke optie bestaat in elke 7.x-release; de REST API
 # negeert onbekende velden, dus na het zetten lezen we terug wat is blijven staan.
-GUI_GLOBAL_OFF = {
+GUI_GLOBAL = {
+    "admintimeout": ADMIN_TIMEOUT,
     "gui-forticare-registration-setup-warning": "disable",
     "gui-auto-upgrade-setup-warning": "disable",
     "gui-firmware-upgrade-setup-warning": "disable",
@@ -422,14 +425,15 @@ GUI_GLOBAL_OFF = {
 def suppress_setup_wizard(log, api):
     """Zet de vragen bij de eerste GUI-login uit (lab: geen FortiCare-registratie)."""
     try:
-        api.put("cmdb/system/global", GUI_GLOBAL_OFF)
+        api.put("cmdb/system/global", GUI_GLOBAL)
         cur = api.get("cmdb/system/global").get("results", {})
     except (RuntimeError, requests.RequestException) as e:
         log(f"⚠ setup-wizard uitzetten mislukt: {e}")
         return
-    applied = [k for k, v in GUI_GLOBAL_OFF.items() if cur.get(k) == v]
-    unknown = [k for k in GUI_GLOBAL_OFF if k not in cur]
-    log(f"setup-wizard bij eerste login: {len(applied)} instelling(en) uit"
+    applied = [k for k, v in GUI_GLOBAL.items() if str(cur.get(k)) == str(v)]
+    unknown = [k for k in GUI_GLOBAL if k not in cur]
+    log(f"GUI: logout na {cur.get('admintimeout', '?')} min; setup-wizard: "
+        f"{len([k for k in applied if k != 'admintimeout'])} instelling(en) uit"
         + (f"; niet in deze FortiOS-versie: {', '.join(unknown)}" if unknown else ""))
     # 'What's new' en dashboard-keuze zijn per admin; markeer de huidige release als gezien.
     try:
