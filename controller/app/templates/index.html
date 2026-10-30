@@ -92,7 +92,7 @@
         <div class="field" data-wan="static">
           <label for="i-wangw">Default gateway</label>
           <input id="i-wangw" placeholder="192.168.1.1">
-          <div class="hint">Router naar internet; nodig voor FortiGuard-updates en de licentie.</div>
+          <div class="hint">Router naar internet; verplicht. Zonder default route geen FortiGuard en geen licentie-activatie.</div>
         </div>
         <div class="field" data-wan="dhcp">
           <label for="i-mgmtip">Management-IP</label>
@@ -101,7 +101,26 @@
             (DHCP-server of FortiGate-console) en vul het hier in.</div>
         </div>
       </div>
-      <div class="actions"><button class="primary" data-save="wan">Opslaan</button><span class="result" data-result="wan"></span></div>
+      <div class="grid2">
+        <div class="field">
+          <label for="i-dns1">DNS-server primair</label>
+          <input id="i-dns1" placeholder="bijv. 192.168.1.1">
+          <div class="hint">Nodig om FortiGuard en FortiFlex (licentie) te bereiken. Leeg = FortiOS-standaard:
+            FortiGuard-DNS via DNS-over-TLS (tcp/853), wat veel netwerken blokkeren.
+            <span id="dns-suggest"></span></div>
+        </div>
+        <div class="field">
+          <label for="i-dns2">DNS-server secundair</label>
+          <input id="i-dns2" placeholder="optioneel, bijv. 1.1.1.1">
+          <div class="hint">De FortiGate is ook DNS-proxy voor de OT-segmenten en gebruikt deze servers als upstream.</div>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="primary" data-save="wan">Opslaan</button>
+        <span class="result" data-result="wan"></span>
+      </div>
+      <p class="hint">Deze instellingen gaan via cloud-init mee bij de eerste boot. Na een wijziging de FortiGate
+        opnieuw uitrollen (VM verwijderen via <b>Afbreken…</b> en daarna <b>Deploy lab</b>).</p>
     </div>
 
     <!-- 4. Beheer -->

@@ -64,10 +64,7 @@ def bootstrap_config(topo, state) -> str:
             "    next",
         ]
     lines.append("end")
-    if wan["mode"] == "static" and wan.get("gateway"):
-        lines += ["config router static", "    edit 1",
-                  f"        set gateway {wan['gateway']}", "        set device port1",
-                  "    next", "end"]
+    lines += route_lines(wan) + dns_lines(wan)
     # DNS-proxy op elke segment-gateway (devices gebruiken de FGT als resolver)
     lines.append("config system dns-server")
     for seg in topo["segments"]:
@@ -80,6 +77,27 @@ def bootstrap_config(topo, state) -> str:
               "config log setting", "    set fwpolicy-implicit-log enable",
               "    set local-in-deny-unicast enable", "end"]
     return "\n".join(lines) + "\n"
+
+
+def route_lines(wan) -> list[str]:
+    if wan["mode"] != "static" or not wan.get("gateway"):
+        return []
+    return ["config router static", "    edit 1", f"        set gateway {wan['gateway']}",
+            "        set device port1", "    next", "end"]
+
+
+def dns_lines(wan) -> list[str]:
+    """Eigen DNS-servers. Zonder deze instelling gebruikt FortiOS de FortiGuard-DNS
+    (96.45.45.45) via DNS-over-TLS (tcp/853), wat in veel netwerken geblokkeerd is;
+    dan faalt o.a. de FortiFlex-activatie."""
+    servers = [d for d in (wan.get("dns1"), wan.get("dns2")) if d]
+    if not servers:
+        return []
+    lines = ["config system dns", f"    set primary {servers[0]}"]
+    if len(servers) > 1:
+        lines.append(f"    set secondary {servers[1]}")
+    lines += ["    set protocol cleartext", "end"]
+    return lines
 
 
 # --------------------------------------------------------------------------
@@ -186,6 +204,24 @@ def ensure_license(log, topo):
             "Zonder geldige licentie (en OT-licentie) ontbreken industriële signatures.")
 
 
+def connectivity_test(log, topo):
+    out = ssh_cli(topo, ["get router info routing-table static", "get system dns",
+                         "execute ping-options repeat-count 2",
+                         "execute ping update.fortiguard.net"], wait=4)
+    resolved = re.search(r"PING update\.fortiguard\.net \(([\d.]+)\)", out)
+    replies = re.search(r"(\d+) packets received", out)
+    if not resolved:
+        log("✖ DNS: update.fortiguard.net wordt niet opgelost. Controleer de DNS-servers.")
+    else:
+        log(f"✔ DNS: update.fortiguard.net -> {resolved.group(1)}")
+        if replies and int(replies.group(1)) > 0:
+            log("✔ internet: ping-antwoord ontvangen")
+        else:
+            log("⚠ geen ping-antwoord (ICMP kan geblokkeerd zijn); controleer gateway en uitgaand verkeer")
+    if not re.search(r"0\.0\.0\.0/0", out):
+        log("✖ geen default route: vul de gateway van port1 in")
+
+
 def ensure_api_key(log, topo):
     if get_state().get("fgt_api_key"):
         return
@@ -229,6 +265,7 @@ def _resolve_ot_apps(api, log):
 def provision(log, topo):
     wait_reachable(log, topo)
     time.sleep(20)  # services na GUI-start nog even laten settelen
+    connectivity_test(log, topo)
     ensure_license(log, topo)
     ensure_api_key(log, topo)
     api = Api(topo)

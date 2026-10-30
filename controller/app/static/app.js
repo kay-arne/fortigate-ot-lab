@@ -96,6 +96,13 @@ function fillSettings(s) {
   $("#i-wanip").value = s.wan.ip || "";
   $("#i-wangw").value = s.wan.gateway || "";
   $("#i-mgmtip").value = s.fgt_mgmt_ip || "";
+  const sugg = s.dns_suggestion || [];
+  $("#i-dns1").value = s.wan.dns1 || "";
+  $("#i-dns2").value = s.wan.dns2 || "";
+  $("#dns-suggest").innerHTML = sugg.length && !s.wan.dns1
+    ? `<br>Voorstel (DNS van de controller): <a href="#" id="dns-use">${sugg.map(esc).join(", ")} gebruiken</a>` : "";
+  const use = $("#dns-use");
+  if (use) use.onclick = (e) => { e.preventDefault(); $("#i-dns1").value = sugg[0] || ""; $("#i-dns2").value = sugg[1] || ""; };
   $("#i-adminpw").value = s.fgt_admin_password || "";
   $("#o-apikey").value = s.fgt_api_key || "";
   $("#i-token").value = s.fortiflex_token || "";
@@ -152,7 +159,8 @@ function showResult(key, ok, msg) {
 
 const savePayload = {
   wan: () => ({ wan_mode: $("#i-wanmode").value, wan_ip: $("#i-wanip").value.trim(),
-                wan_gateway: $("#i-wangw").value.trim(), fgt_mgmt_ip: $("#i-mgmtip").value.trim() }),
+                wan_gateway: $("#i-wangw").value.trim(), fgt_mgmt_ip: $("#i-mgmtip").value.trim(),
+                wan_dns1: $("#i-dns1").value.trim(), wan_dns2: $("#i-dns2").value.trim() }),
   admin: () => ({ admin_password: $("#i-adminpw").value }),
   license: () => ({ license_mode: ($("input[name=lic]:checked") || {}).value || "none",
                     fortiflex_token: $("#i-token").value.trim() || null }),

@@ -84,7 +84,7 @@ def public_state() -> dict:
     checks = [
         {"id": "host", "label": "Proxmox-koppeling", "ok": HOST_FILE.exists()},
         {"id": "image", "label": "FortiGate-image", "ok": bool(image_size)},
-        {"id": "wan", "label": "WAN-adres port1", "ok": wan["mode"] == "dhcp" or bool(wan.get("ip"))},
+        {"id": "wan", "label": "WAN-adres port1", "ok": wan["mode"] == "dhcp" or bool(wan.get("ip") and wan.get("gateway"))},
         {"id": "admin", "label": "Admin-wachtwoord", "ok": bool(s.get("fgt_admin_password"))},
         {"id": "license", "label": "Licentie", "optional": True,
          "ok": (lic_mode == "file" and bool(s.get("license_file")))
@@ -100,10 +100,30 @@ def public_state() -> dict:
         "fgt_admin_password": s.get("fgt_admin_password") or "",
         "fgt_api_key": s.get("fgt_api_key") or "",
         "fgt_mgmt_ip": s.get("fgt_mgmt_ip") or "",
+        "dns_suggestion": _resolvers(),
         "deployed": s.get("deployed", False),
         "provisioned": s.get("fgt_provisioned", False),
         "checks": checks,
     }
+
+
+def _resolvers() -> list[str]:
+    """DNS-servers van de controller zelf, als voorstel voor de FortiGate."""
+    try:
+        lines = Path("/etc/resolv.conf").read_text().splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == "nameserver":
+            try:
+                ip = ipaddress.ip_address(parts[1])
+            except ValueError:
+                continue
+            if ip.version == 4 and not ip.is_loopback:  # FortiOS 'set primary' is alleen IPv4
+                out.append(parts[1])
+    return out[:2]
 
 
 @app.get("/api/settings")
@@ -183,6 +203,8 @@ class Settings(BaseModel):
     wan_mode: Optional[str] = None
     wan_ip: Optional[str] = None
     wan_gateway: Optional[str] = None
+    wan_dns1: Optional[str] = None
+    wan_dns2: Optional[str] = None
     fgt_mgmt_ip: Optional[str] = None
     admin_password: Optional[str] = None
     license_mode: Optional[str] = None       # none | file | fortiflex
@@ -209,7 +231,20 @@ def save_settings(s: Settings):
                         raise HTTPException(400, f"gateway {gw} ligt niet in {iface.network}")
                 except ValueError:
                     raise HTTPException(400, "ongeldige gateway")
-        changes["wan"] = {"mode": s.wan_mode, "ip": ip if s.wan_mode == "static" else "",
+        if s.wan_mode == "static" and not gw:
+            raise HTTPException(400, "gateway is verplicht: zonder default route geen internet/licentie")
+        dns = []
+        for d in (s.wan_dns1, s.wan_dns2):
+            d = (d or "").strip()
+            if d:
+                try:
+                    if ipaddress.ip_address(d).version != 4:
+                        raise ValueError
+                except ValueError:
+                    raise HTTPException(400, f"ongeldige DNS-server: {d} (IPv4-adres verwacht)")
+            dns.append(d)
+        changes["wan"] = {"dns1": dns[0], "dns2": dns[1],
+                          "mode": s.wan_mode, "ip": ip if s.wan_mode == "static" else "",
                           "gateway": gw if s.wan_mode == "static" else ""}
     if s.fgt_mgmt_ip is not None:
         if s.fgt_mgmt_ip.strip():
