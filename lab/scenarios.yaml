@@ -189,7 +189,7 @@ scenarios:
     manual: true
     run: "modbus-forcelisten 10.10.0.10 zonder -> met virtual patch"
     expect: allowed
-    why: "Dezelfde Modbus FC08-aanval: zonder patch valt de PLC stil, met de FortiGuard-signature Modbus.TCP.Force.Listen.Only (ID 10003675) wordt hij geblokkeerd. Policy wordt daarna hersteld."
+    why: "Dezelfde Modbus FC08-aanval: zonder block valt de PLC stil, met de FortiGuard-signature Modbus.TCP.Force.Listen.Only (ID 11521, in de OT-IPS-sensor) wordt hij geblokkeerd. Policy wordt daarna hersteld."
     logs: [ips]
 
   # --- Uitbraak naar internet ---------------------------------------------

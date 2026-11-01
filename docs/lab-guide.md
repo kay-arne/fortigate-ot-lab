@@ -408,16 +408,19 @@ en die mag over HTTP bij het MES.*
     sub-functie 0x0004) bereikt de PLC. Dat is een echte, in de Modbus-spec
     beschreven DoS: de PLC stopt met reageren op het netwerk. Kijk in de SCADA HMI —
     de tank-PLC valt ~20 s weg. Het proces loopt intern door, maar je bent blind;
-  - *dan met virtual patching aan*: precies dezelfde aanval wordt nu door de
-    FortiGuard-signature **Modbus.TCP.Force.Listen.Only** (ID 10003675) geblokkeerd
+  - *dan met de block aan*: precies dezelfde aanval wordt nu door de
+    FortiGuard-signature **Modbus.TCP.Force.Listen.Only** (ID 11521) geblokkeerd
     voordat hij de PLC bereikt. De PLC blijft bereikbaar.
-  De demo zet het virtual-patch-profiel alleen op de L3→L1-policy even uit en daarna
-  weer aan; na afloop staat alles zoals het was.
+  De demo wisselt de IPS-sensor van de L3→L1-policy even naar een variant zonder
+  deze block en daarna terug; na afloop staat alles zoals het was.
 - Bekijk in *Log & Report > Security Events* de blokkade: signature
   `Modbus.TCP.Force.Listen.Only`, actie *dropped*, afkomstig van het L3-bron-IP.
-- Open *Security Profiles > Virtual Patching Signatures* en zoek op `modbus`: dit is
-  geen zelfgeschreven regel maar een kant-en-klare FortiGuard-signature (Action
-  *Block*), net als de duizenden CVE-signatures voor CODESYS, Siemens en Schneider.
+- Open *Security Profiles > IPS Signatures* en zoek op `force.listen`: dit is geen
+  zelfgeschreven regel maar een kant-en-klare FortiGuard OT-signature. Zijn
+  default-actie is *Pass* (detecteren); het lab forceert hem op *Block* in de
+  `OT-IPS`-sensor voor de conduits de fabriek in. Fortinet toont dezelfde signature
+  ook onder *Virtual Patching Signatures*, naast duizenden CVE-signatures voor
+  CODESYS, Siemens en Schneider.
 
 ![Virtual Patching Signatures: de Modbus-signatures, waaronder Force.Listen.Only (Block)](img/fgt-vpatch-sigs.jpg)
 
@@ -437,11 +440,17 @@ Security Service.
 
 > Shellshock is het IT/web-voorbeeld (één HTTP-header), `plc-dos-vpatch` het
 > OT-voorbeeld op het Modbus-protocol zelf. Beide signatures komen kant-en-klaar uit
-> FortiGuard en vragen de **OT Security Service** (zie "Voordat je begint"). De
+> FortiGuard en vragen de **OT Security Service** (zie "Voordat je begint").
+>
+> Twee manieren om zo'n signature af te dwingen: het **Virtual Patching-profiel**
+> (het MES-voorbeeld hierboven) koppelt automatisch aan *gedetecteerde*
+> product-kwetsbaarheden — handig op echte PLC's, maar onze gesimuleerde PLC is niet
+> aan een CVE gekoppeld, dus daar grijpt het profiel niet. Daarom zetten we voor de
+> PLC-demo de signature expliciet op *block* in de **OT-IPS-sensor**: zelfde
+> FortiGuard-signature, maar gegarandeerd actief op het verkeerspatroon. De
 > virtual-patch-database bevat daarnaast duizenden CVE-signatures voor concrete
-> PLC-firmware (CODESYS, Siemens, Schneider); die gaan pas af op het exacte
-> exploit-verkeer van dat product, dus met de generieke gesimuleerde PLC's in dit
-> lab zie je díe niet vanzelf afgaan.
+> firmware (CODESYS, Siemens, Schneider); die gaan pas af op het exacte
+> exploit-verkeer van dat product.
 
 ## Afsluiting: het rapport voor Mark
 

@@ -231,12 +231,14 @@ def _poll_plc(node, ip, want_up: bool, log, tries=6) -> bool:
 
 
 def check_plc_dos_vpatch(log, topo) -> dict:
-    """FortiGuard virtual patching: dezelfde Force-Listen-Only-aanval (Modbus
-    FC08) eerst zonder, dan met de virtual-patch-signature op de L3->L1-policy.
-    Zonder patch valt de PLC stil; met patch (Modbus.TCP.Force.Listen.Only,
-    ID 10003675) wordt het pakket geblokkeerd en blijft de PLC staan."""
-    before = fortigate.policy_vpatch(topo, VPATCH_POLICY, "")
-    log(f"  virtual patch tijdelijk UIT op policy '{VPATCH_POLICY}' (stond op {before})")
+    """Virtual patching: dezelfde Force-Listen-Only-aanval (Modbus FC08) eerst
+    zonder, dan met de FortiGuard-signature Modbus.TCP.Force.Listen.Only (ID
+    11521) op de L3->L1-policy. We wisselen de IPS-sensor van de policy tussen een
+    variant zonder en met de Force-Listen-block. Zonder valt de PLC stil; met
+    block wordt het pakket geblokkeerd en blijft de PLC staan."""
+    before = fortigate.policy_ips_sensor(topo, VPATCH_POLICY, fortigate.OT_IPS_SENSOR_NOVP)
+    log(f"  IPS-sensor op '{VPATCH_POLICY}' tijdelijk naar {fortigate.OT_IPS_SENSOR_NOVP} "
+        f"(geen Force-Listen-block); stond op {before}")
     phase1 = phase2 = False
     atk2 = {}
     try:
@@ -251,16 +253,16 @@ def check_plc_dos_vpatch(log, topo) -> dict:
         log(f"  wacht tot de PLC vanzelf herstelt (~{VPATCH_RECOVER} s)")
         time.sleep(VPATCH_RECOVER)
 
-        fortigate.policy_vpatch(topo, VPATCH_POLICY, before or fortigate.VPATCH_PROFILE)
-        log("  fase 2 - virtual patch weer AAN, zelfde aanval")
+        fortigate.policy_ips_sensor(topo, VPATCH_POLICY, fortigate.OT_IPS_SENSOR)
+        log("  fase 2 - Force-Listen-block (virtual patch) weer AAN, zelfde aanval")
         time.sleep(5)
         atk2 = run_command(VPATCH_ATTACKER, f"modbus-forcelisten {VPATCH_PLC}")
         log(f"    {atk2.get('detail')}")
         phase2 = _poll_plc(VPATCH_ATTACKER, VPATCH_PLC, want_up=True, log=log)
         log(f"    PLC {'bleef bereikbaar (aanval geblokkeerd)' if phase2 else 'viel alsnog stil (onverwacht)'}")
     finally:
-        fortigate.policy_vpatch(topo, VPATCH_POLICY, before or fortigate.VPATCH_PROFILE)
-        log(f"  policy '{VPATCH_POLICY}' virtual-patch hersteld naar {before or fortigate.VPATCH_PROFILE}")
+        fortigate.policy_ips_sensor(topo, VPATCH_POLICY, before or fortigate.OT_IPS_SENSOR)
+        log(f"  IPS-sensor op '{VPATCH_POLICY}' hersteld naar {before or fortigate.OT_IPS_SENSOR}")
         _poll_plc(VPATCH_ATTACKER, VPATCH_PLC, want_up=True, log=log)
 
     detail = (("patch uit: PLC viel stil" if phase1 else "patch uit: PLC bleef staan (onverwacht)")

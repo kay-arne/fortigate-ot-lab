@@ -464,6 +464,14 @@ def suppress_setup_wizard(log, api):
 GUI_OT_FEATURES = {"gui-ot": "enable", "gui-virtual-patch-profile": "enable"}
 VPATCH_PROFILE = "OT-vpatch"
 
+# Modbus.TCP.Force.Listen.Only: een FortiGuard OT IPS-signature voor een echte
+# Modbus-DoS die de PLC stilzet. Zijn default-actie in de IPS-database is 'pass';
+# het virtual-patch-profiel dwingt hem niet af op een generieke (niet aan een CVE
+# gekoppelde) PLC. We forceren hem daarom expliciet op 'block' in de OT-IPS-sensor.
+FORCELISTEN_SIG = 11521
+OT_IPS_SENSOR = "OT-IPS"
+OT_IPS_SENSOR_NOVP = "OT-IPS-novp"  # zelfde sensor zonder de Force-Listen-block (demo)
+
 
 def ensure_aliases(log, api, topo):
     """Aliassen ook via de API zetten, zodat een bestaand lab ze krijgt zonder
@@ -598,11 +606,19 @@ def provision(log, topo):
     log("IPS-sensor (incl. OT-signatures)")
     # info/low op 'default': opt-in-signatures als Modbus.TCP.Unauthorized.Read.Request.PLC
     # gaan anders af op elke read van de HMI en historian over een toegestane conduit.
-    api.upsert("cmdb/ips/sensor", "OT-IPS", {
-        "name": "OT-IPS", "comment": "IT + OT signatures, block medium+",
-        "entries": [{"id": 1, "severity": "medium high critical", "status": "enable",
+    base_entries = [{"id": 1, "severity": "medium high critical", "status": "enable",
                      "action": "block", "log": "enable", "log-packet": "enable"},
-                    {"id": 2, "severity": "info low", "status": "default", "action": "pass", "log": "enable"}]})
+                    {"id": 2, "severity": "info low", "status": "default", "action": "pass", "log": "enable"}]
+    # Force-Listen (Modbus-DoS) staat standaard op 'pass'; expliciet op block forceren.
+    forcelisten = {"id": 3, "rule": [{"id": FORCELISTEN_SIG}], "status": "enable",
+                   "action": "block", "log": "enable", "log-packet": "enable"}
+    api.upsert("cmdb/ips/sensor", OT_IPS_SENSOR, {
+        "name": OT_IPS_SENSOR, "comment": "IT + OT signatures, block medium+ en Modbus Force-Listen",
+        "entries": base_entries + [forcelisten]})
+    # Zelfde sensor zonder de Force-Listen-block, voor de virtual-patch-demo (plc-dos-vpatch).
+    api.upsert("cmdb/ips/sensor", OT_IPS_SENSOR_NOVP, {
+        "name": OT_IPS_SENSOR_NOVP, "comment": "OT-IPS zonder Force-Listen-block (demo plc-dos-vpatch)",
+        "entries": base_entries})
 
     log("VIP: remote access naar de DMZ jump host (WAN :2222 -> 22)")
     wan_ip = mgmt_ip(topo)
@@ -685,6 +701,18 @@ def policy_vpatch(topo, name: str, profile: str | None = None) -> str | None:
     if profile is not None:
         api.put(f"cmdb/firewall/policy/{found[0]['policyid']}", {"virtual-patch-profile": profile})
     return found[0].get("virtual-patch-profile") or None
+
+
+def policy_ips_sensor(topo, name: str, sensor: str | None = None) -> str | None:
+    """IPS-sensor van een policy (op naam); met sensor wordt hij gezet.
+    Geeft de sensor van vóór de wijziging terug."""
+    api = Api(topo)
+    found = api.get("cmdb/firewall/policy", filter=f"name=={name}").get("results", [])
+    if not found:
+        raise RuntimeError(f"policy '{name}' niet gevonden")
+    if sensor is not None:
+        api.put(f"cmdb/firewall/policy/{found[0]['policyid']}", {"ips-sensor": sensor})
+    return found[0].get("ips-sensor") or None
 
 
 def query_logs(topo, kind: str, srcip: str, since: float, rows=50, dstip: str | None = None) -> list[dict]:
