@@ -366,15 +366,18 @@ def connectivity_test(log, topo):
 # --------------------------------------------------------------------------
 # OT-signatures (FortiGuard OT Security Service)
 # --------------------------------------------------------------------------
-# Het lab staat of valt met deze pakketten: zonder 'device identification' en
-# 'vulnerability correlation & virtual patching' herkent de FortiGate de
+# Het lab staat of valt met deze pakketten (namen zoals 'diagnose autoupdate
+# versions' ze meldt): zonder deze herkent de FortiGate de
 # OT-applicaties niet (Modbus en S7 worden 'unknown-<id>'), werken de
 # OT-readonly-blokkade, de asset-lijst en de Modbus-signature niet.
 # Naam in 'diagnose autoupdate versions' -> label. De namen verschillen per
 # FortiOS-build; wat niet gevonden wordt, heet 'onbekend' en blokkeert niets.
 OT_PACKAGES = [
-    ("OT device identification", re.compile(r"device.?ident", re.I)),
-    ("OT vulnerability correlation & virtual patching", re.compile(r"vulnerab|virtual.?patch|correlation", re.I)),
+    ("IoT Detect Definitions", re.compile(r"^iot[\s_-]*detect", re.I)),
+    ("MAC Address Database", re.compile(r"^mac[\s_-]*address", re.I)),
+    ("OT Detect Definitions", re.compile(r"^ot[\s_-]*detect", re.I)),
+    ("OT Patch Definitions", re.compile(r"^ot[\s_-]*patch", re.I)),
+    ("OT Threat Definitions", re.compile(r"^ot[\s_-]*threat", re.I)),
 ]
 OT_UPDATE_WAIT = 150  # seconden wachten per update-poging
 

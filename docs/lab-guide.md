@@ -113,10 +113,13 @@ die niet volledig staat.
 
 - **Zijn de OT-pakketten geladen?** Een geldige licentie is niet genoeg: de FortiGate
   moet de pakketten ook hebben gedownload. Klap in *System > FortiGuard* de kaart
-  *Operational Technology (OT) Security Service* open: **OT device identification**
-  en **OT vulnerability correlation & virtual patching signatures** moeten een
-  versie hoger dan `0.00000` hebben. Zonder deze pakketten herkent de FortiGate
-  Modbus en S7 niet (het verkeer heet dan `unknown-<nummer>`) en falen de OT-tests.
+  *Operational Technology (OT) Security Service* open: **OT threat definitions**,
+  **OT device identification** en **OT vulnerability correlation & virtual patching
+  signatures** moeten een versie hoger dan `0.00000` hebben. De controller controleert
+  dezelfde pakketten onder hun namen op de FortiGate: *IoT Detect*, *MAC Address
+  Database*, *OT Detect*, *OT Patch* en *OT Threat Definitions*. Zonder deze pakketten
+  herkent de FortiGate Modbus en S7 niet (het verkeer heet dan `unknown-<nummer>`) en
+  falen de OT-tests.
 - **Controleert de controller dit ook?** Ja, op drie plekken:
   - de tegel **OT-signatures** in de Lab-tab (groen is geladen, rood ontbreekt);
   - de knop **OT-signatures bijwerken** onder de Lab-tab: start een FortiGuard-update

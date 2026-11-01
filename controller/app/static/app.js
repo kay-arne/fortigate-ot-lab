@@ -90,7 +90,7 @@ function renderLab(lab) {
       <div class="comp" data-comp="policies">${check()}<span class="dot ${f.api_ok ? "running" : f.api ? "stopped" : "absent"}"></span>
         <div><b>FortiGate-policies</b><div class="ip" title="${esc(f.api_error || "")}">REST API ${f.api_ok ? "antwoordt" : f.api ? "antwoordt niet" : "nog niet gekoppeld"} · adressen, conduits, OT-profielen</div></div></div>
       <div class="comp${sg && sg.state === "ok" ? " comp-ok" : ""}" style="cursor:default">${check().replace("<input", '<input style="visibility:hidden"')}<span class="dot ${sg ? (sg.state === "ok" ? "running" : sg.state === "missing" ? "stopped" : "absent") : "absent"}"></span>
-        <div><b>OT-signatures</b><div class="ip" title="${esc(sg ? sg.detail : "")}">${sg ? (sg.state === "ok" ? "geladen" : sg.state === "missing" ? "ONTBREKEN: het lab werkt zonder niet" : "niet te controleren") : "nog niet gecontroleerd"} · device identification, virtual patching</div></div></div>
+        <div><b>OT-signatures</b><div class="ip" title="${esc(sg ? sg.detail : "")}">${sg ? (sg.state === "ok" ? "geladen" : sg.state === "missing" ? "ONTBREKEN: het lab werkt zonder niet" : "niet te controleren") : "nog niet gecontroleerd"} · IoT/OT Detect, Patch, Threat, MAC-database</div></div></div>
       <div class="comp" data-comp="network">${check()}<span class="dot ${bridges === lab.segments.length ? "running" : bridges ? "stopped" : "absent"}"></span>
         <div><b>Netwerk</b><div class="ip">${bridges}/${lab.segments.length} Purdue-bridges aanwezig</div></div></div>
       <div class="comp" data-comp="template">${check()}<span class="dot ${t.status === "stopped" ? "running" : t.status}"></span>

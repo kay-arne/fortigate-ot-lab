@@ -159,12 +159,13 @@ met een echte FortiGate-VM gedraaid**. Controleer bij de eerste uitrol vooral:
 - **OT-signatures**: application control-ID's worden opgezocht in de FortiGuard-database van de
   FortiGate (`/api/v2/cmdb/application/name`). Zonder actieve OT-licentie en een FortiGuard-update vindt
   de controller er geen; zet dan na de update *FortiGate policies opnieuw toepassen* aan.
-  De OT-pakketten (*OT device identification* en *OT vulnerability correlation & virtual patching*)
-  zijn een harde voorwaarde: de provisioning start zelf een FortiGuard-update vóór de policy-set en
+  De OT-pakketten (*IoT Detect Definitions*, *MAC Address Database*, *OT Detect Definitions*, *OT Patch
+  Definitions* en *OT Threat Definitions*) zijn een harde voorwaarde: de provisioning start zelf een FortiGuard-update vóór de policy-set en
   stopt als ze daarna nog ontbreken. De Lab-tab toont de status (tegel **OT-signatures**), de knop
   **OT-signatures bijwerken** start een nieuwe update-ronde en de Testcenter-test `ot-signatures`
-  controleert het. De pakketnamen komen uit `diagnose autoupdate versions`; herkent de controller ze
-  niet, dan meldt hij dat en blokkeert niets (pas `OT_PACKAGES` in `controller/app/fortigate.py` aan).
+  controleert het. Een pakket op versie `0.00000` telt als niet geladen. De namen komen uit `diagnose autoupdate versions`;
+  herkent de controller ze niet, dan meldt hij dat en blokkeert niets (pas `OT_PACKAGES` in
+  `controller/app/fortigate.py` aan).
 - `config ips global / set exclude-signatures none` neemt OT-signatures op in IPS; controleer of je
   FortiOS-build dit zo verwacht.
 - Het LXC-template haalt eenmalig packages op via `vmbr0` (DHCP). Geen DHCP? Zet `template_net` in
