@@ -30,11 +30,20 @@ def run_hmi(cfg):
     def poll():
         clients = {ip: ModbusTcpClient(ip, port=502, timeout=2, retries=0) for ip in args.get("plcs", [])}
         s7 = snap7.client.Client() if args.get("s7") else None
+        tick = 0
         while True:
             for ip, c in clients.items():
                 try:
                     rr = c.read_holding_registers(0, count=4, slave=1)
                     values[ip] = {"regs": rr.registers, "ok": True}
+                    # Periodiek de device-identiteit uitlezen (Modbus FC43), zodat de
+                    # FortiGate het device over de L2->L1-conduit als Modicon M580
+                    # fingerprint en zijn kwetsbaarheden kan correleren.
+                    if tick % 15 == 0:
+                        try:
+                            c.read_device_information(read_code=1, slave=1)
+                        except Exception:  # noqa: BLE001 - identificatie is best-effort
+                            pass
                 except Exception as e:  # noqa: BLE001
                     values[ip] = {"regs": [], "ok": False, "err": str(e)}
                     c.close()
@@ -48,6 +57,7 @@ def run_hmi(cfg):
                 except Exception as e:  # noqa: BLE001
                     values[args["s7"]] = {"regs": [], "ok": False, "err": str(e)}
                     s7.disconnect()
+            tick += 1
             time.sleep(2)
 
     threading.Thread(target=poll, daemon=True).start()

@@ -15,9 +15,26 @@ import time
 from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.datastore import (ModbusSequentialDataBlock, ModbusServerContext,
                                 ModbusSlaveContext)
+from pymodbus.device import ModbusDeviceIdentification
 from pymodbus.server import StartAsyncTcpServer
 
 log = logging.getLogger("otsim.modbus")
+
+
+def _plc_identity():
+    """De PLC presenteert zich via Modbus Read Device Identification (FC43) als een
+    Schneider Modicon M580 met firmware 2.70 -- een versie met bekende CVE's (o.a.
+    CVE-2018-7846, UMAS DoS). Zo kan de FortiGate het device fingerprinten en zijn
+    kwetsbaarheden correleren; dat is de voorwaarde waaronder virtual patching gaat
+    ingrijpen."""
+    ident = ModbusDeviceIdentification()
+    ident.VendorName = "Schneider Electric"
+    ident.ProductCode = "BMEP582040"
+    ident.VendorUrl = "https://www.se.com"
+    ident.ProductName = "Modicon M580"
+    ident.ModelName = "BMEP582040"
+    ident.MajorMinorRevision = "2.70"
+    return ident
 
 # Force Listen Only Mode (Modbus FC08, sub-functie 0x0004): een device dat dit
 # commando krijgt stopt met reageren op het netwerk tot het herstart wordt. Het
@@ -151,7 +168,7 @@ def run_plc(cfg):
 
     async def main():
         asyncio.create_task(_plc_loop(store, args.get("process", "tank"), args.get("io")))
-        log.info("Modbus PLC (%s) op :502", args.get("process"))
-        await StartAsyncTcpServer(context=ctx, address=("0.0.0.0", 502),
+        log.info("Modbus PLC (%s) op :502, device-id Modicon M580", args.get("process"))
+        await StartAsyncTcpServer(context=ctx, address=("0.0.0.0", 502), identity=_plc_identity(),
                                   request_tracer=tracer, response_manipulator=manip)
     asyncio.run(main())
