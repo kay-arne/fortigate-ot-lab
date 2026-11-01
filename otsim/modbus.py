@@ -33,7 +33,8 @@ def _plc_identity():
     ident.VendorUrl = "https://www.se.com"
     ident.ProductName = "Modicon M580"
     ident.ModelName = "BMEP582040"
-    ident.MajorMinorRevision = "2.70"
+    ident.MajorMinorRevision = "SV2.70"  # Schneider-firmwarenotatie, vóór de patch van CVE-2018-78xx
+    ident.UserApplicationName = "Modicon M580"
     return ident
 
 # Force Listen Only Mode (Modbus FC08, sub-functie 0x0004): een device dat dit

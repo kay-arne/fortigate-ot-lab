@@ -41,7 +41,10 @@ def run_hmi(cfg):
                     # fingerprint en zijn kwetsbaarheden kan correleren.
                     if tick % 15 == 0:
                         try:
-                            c.read_device_information(read_code=1, slave=1)
+                            # read_code=2 (regular) geeft álle identificatie-objecten terug
+                            # (vendor, product, firmware, model), zodat de FortiGate
+                            # het volledige fingerprint ziet en de firmware kan afleiden.
+                            c.read_device_information(read_code=2, slave=1)
                         except Exception:  # noqa: BLE001 - identificatie is best-effort
                             pass
                 except Exception as e:  # noqa: BLE001
