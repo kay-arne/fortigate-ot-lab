@@ -78,6 +78,7 @@ function renderLab(lab) {
   const bySeg = {};
   lab.nodes.forEach((n) => (bySeg[n.segment] ||= []).push(n));
   const f = lab.fortigate;
+  const sg = f.signatures;
   const t = lab.template || { vmid: "-", status: "unknown" };
   const bridges = lab.segments.filter((s) => s.present).length;
   let html = `<div class="purdue">
@@ -88,6 +89,8 @@ function renderLab(lab) {
         <div><b>${esc(f.name || "FortiGate")} · ${f.vmid}</b><div class="ip">port1 ${esc(f.wan.ip || f.wan.mode)} · status: ${esc(f.status)}${f.version ? ` · ${esc(f.version)}` : ""}</div></div></div>
       <div class="comp" data-comp="policies">${check()}<span class="dot ${f.api_ok ? "running" : f.api ? "stopped" : "absent"}"></span>
         <div><b>FortiGate-policies</b><div class="ip" title="${esc(f.api_error || "")}">REST API ${f.api_ok ? "antwoordt" : f.api ? "antwoordt niet" : "nog niet gekoppeld"} · adressen, conduits, OT-profielen</div></div></div>
+      <div class="comp${sg && sg.state === "ok" ? " comp-ok" : ""}" style="cursor:default">${check().replace("<input", '<input style="visibility:hidden"')}<span class="dot ${sg ? (sg.state === "ok" ? "running" : sg.state === "missing" ? "stopped" : "absent") : "absent"}"></span>
+        <div><b>OT-signatures</b><div class="ip" title="${esc(sg ? sg.detail : "")}">${sg ? (sg.state === "ok" ? "geladen" : sg.state === "missing" ? "ONTBREKEN: het lab werkt zonder niet" : "niet te controleren") : "nog niet gecontroleerd"} · device identification, virtual patching</div></div></div>
       <div class="comp" data-comp="network">${check()}<span class="dot ${bridges === lab.segments.length ? "running" : bridges ? "stopped" : "absent"}"></span>
         <div><b>Netwerk</b><div class="ip">${bridges}/${lab.segments.length} Purdue-bridges aanwezig</div></div></div>
       <div class="comp" data-comp="template">${check()}<span class="dot ${t.status === "stopped" ? "running" : t.status}"></span>
@@ -294,6 +297,7 @@ $("#btn-host-test").onclick = async () => {
 // --- acties ----------------------------------------------------------------
 $("#btn-deploy").onclick = () => confirm("Volledig lab uitrollen op de Proxmox host?") && action("/api/deploy");
 $("#btn-update").onclick = () => action("/api/update-sims");
+$("#btn-signatures").onclick = () => action("/api/signatures/update");
 $("#btn-destroy").onclick = () => {
   if (!confirm("Alle lab-VM's en containers verwijderen?")) return;
   const template = confirm("Ook het LXC-template verwijderen?");

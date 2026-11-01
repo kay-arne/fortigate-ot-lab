@@ -153,6 +153,18 @@ def check_assets(log, topo) -> dict:
     return {"ok": not missing and not wrong, "detail": detail, "srcip": None}
 
 
+def check_ot_signatures(log, topo) -> dict:
+    """Voorwaarde voor het hele lab: zijn de OT-pakketten op de FortiGate geladen?
+    Zonder device identification en virtual patching worden Modbus en S7 'unknown'
+    en werken de OT-tests niet."""
+    st = fortigate.ot_signature_status(topo)
+    for p in st["packages"]:
+        log(f"  {p['label']}: versie {p['version']} ({'geladen' if p['loaded'] else 'NIET geladen'})")
+    if st["state"] == "missing":
+        log("  start 'OT-signatures bijwerken' in de Lab-tab en draai de test opnieuw")
+    return {"ok": st["state"] == "ok", "detail": st["detail"], "srcip": None}
+
+
 def check_contractor_login(log, topo, mfa=True) -> dict:
     """Inloggen als de contractor via de VIP op de WAN-poort, zoals de kandidaat
     doet: wachtwoord én TOTP-code, daarna een commando in de opgenomen shell.
@@ -270,7 +282,8 @@ def check_plc_dos_vpatch(log, topo) -> dict:
     return {"ok": phase1 and phase2, "detail": detail, "srcip": atk2.get("srcip")}
 
 
-CHECKS = {"assets": check_assets, "contractor-login": check_contractor_login,
+CHECKS = {"ot-signatures": check_ot_signatures, "assets": check_assets,
+          "contractor-login": check_contractor_login,
           "contractor-no-mfa": lambda log, topo: check_contractor_login(log, topo, mfa=False),
           "break-readonly": check_break_readonly, "plc-dos-vpatch": check_plc_dos_vpatch}
 

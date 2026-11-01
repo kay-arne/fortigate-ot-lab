@@ -363,6 +363,123 @@ def connectivity_test(log, topo):
         log("✖ geen default route: vul de gateway van port1 in")
 
 
+# --------------------------------------------------------------------------
+# OT-signatures (FortiGuard OT Security Service)
+# --------------------------------------------------------------------------
+# Het lab staat of valt met deze pakketten: zonder 'device identification' en
+# 'vulnerability correlation & virtual patching' herkent de FortiGate de
+# OT-applicaties niet (Modbus en S7 worden 'unknown-<id>'), werken de
+# OT-readonly-blokkade, de asset-lijst en de Modbus-signature niet.
+# Naam in 'diagnose autoupdate versions' -> label. De namen verschillen per
+# FortiOS-build; wat niet gevonden wordt, heet 'onbekend' en blokkeert niets.
+OT_PACKAGES = [
+    ("OT device identification", re.compile(r"device.?ident", re.I)),
+    ("OT vulnerability correlation & virtual patching", re.compile(r"vulnerab|virtual.?patch|correlation", re.I)),
+]
+OT_UPDATE_WAIT = 150  # seconden wachten per update-poging
+
+
+def autoupdate_versions(topo) -> dict[str, dict]:
+    """Pakketten uit 'diagnose autoupdate versions': naam -> versie en laatste resultaat."""
+    out = ssh_cli(topo, ["diagnose autoupdate versions"], timeout=60).replace("\r", "")
+    lines = out.splitlines()
+    sections: dict[str, dict] = {}
+    cur = None
+    for i, line in enumerate(lines):
+        if re.fullmatch(r"-{3,}", line.strip()) and i > 0 and lines[i - 1].strip():
+            cur = sections.setdefault(lines[i - 1].strip(), {"version": None, "result": "", "attempt": ""})
+        elif cur is not None:
+            if (m := re.match(r"\s*Version:\s*([\d.]+)", line)):
+                cur["version"] = m.group(1)
+            elif (m := re.match(r"\s*Result:\s*(.+)", line)):
+                cur["result"] = m.group(1).strip()
+            elif (m := re.match(r"\s*Last Update Attempt:\s*(.+)", line)):
+                cur["attempt"] = m.group(1).strip()
+    return sections
+
+
+def _version_loaded(version) -> bool:
+    try:
+        return float(version) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def ot_signature_status(topo) -> dict:
+    """Zijn de OT-pakketten geladen? state: ok | missing | unknown (namen niet
+    herkend). Het resultaat wordt bewaard voor de weergave in de UI."""
+    sections = autoupdate_versions(topo)
+    packages, absent = [], []
+    for label, pat in OT_PACKAGES:
+        found = [(n, s) for n, s in sections.items() if pat.search(n)]
+        if not found:
+            absent.append(label)
+            continue
+        name, sec = max(found, key=lambda f: float(f[1]["version"] or 0) if _version_loaded(f[1]["version"]) else -1)
+        packages.append({"label": label, "name": name, "version": sec["version"] or "-",
+                         "loaded": _version_loaded(sec["version"]),
+                         "result": sec["result"], "attempt": sec["attempt"]})
+    missing = [p for p in packages if not p["loaded"]]
+    if missing:
+        state = "missing"
+        detail = "; ".join(f"{p['label']}: versie {p['version']}" for p in missing)
+    elif absent:
+        state = "unknown"
+        detail = (f"pakketten niet herkend in 'diagnose autoupdate versions': {', '.join(absent)}. "
+                  f"Gevonden pakketten: {', '.join(sorted(sections)) or 'geen'}")
+    else:
+        state = "ok"
+        detail = "; ".join(f"{p['label']} {p['version']}" for p in packages)
+    status = {"state": state, "detail": detail, "packages": packages, "at": time.time()}
+    update_state(ot_signatures=status)
+    return status
+
+
+def update_ot_signatures(log, topo, attempts=1, wait=OT_UPDATE_WAIT) -> dict:
+    """Start een FortiGuard-update op de FortiGate en wacht tot de OT-pakketten
+    geladen zijn. Meer pogingen helpt als de eerste download uitblijft."""
+    st = ot_signature_status(topo)
+    log(f"OT-signatures voor de update: {st['state']} ({st['detail']})")
+    for attempt in range(1, attempts + 1):
+        log(f"FortiGuard-update starten ('execute update-now'), poging {attempt}/{attempts}")
+        ssh_cli(topo, ["execute update-now"], timeout=60)
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            time.sleep(15)
+            st = ot_signature_status(topo)
+            if st["state"] != "missing":
+                log(f"✔ OT-signatures geladen: {st['detail']}")
+                return st
+        log(f"  na {wait} s nog steeds: {st['detail']}")
+    for p in st["packages"]:
+        if not p["loaded"]:
+            log(f"  {p['name']}: laatste poging '{p['attempt'] or '-'}', resultaat '{p['result'] or '-'}'")
+    log("✖ OT-signatures niet geladen. Controleer of de FortiGate FortiGuard bereikt (DNS, default route, "
+        "uitgaand verkeer) en of de OT-licentie actief is.")
+    try:
+        connectivity_test(log, topo)
+    except Exception as e:  # noqa: BLE001 - alleen diagnose
+        log(f"  connectiviteitstest mislukt: {e}")
+    return st
+
+
+def ensure_ot_signatures(log, topo):
+    """Provisioning-stap: zonder OT-signatures faalt het lab, dus dit stopt de
+    provisioning als ze ook na een update ontbreken."""
+    st = ot_signature_status(topo)
+    if st["state"] == "ok":
+        log(f"OT-signatures geladen: {st['detail']}")
+        return
+    if st["state"] == "unknown":
+        log(f"⚠ OT-signatures niet te controleren: {st['detail']}")
+        return
+    st = update_ot_signatures(log, topo, attempts=3)
+    if st["state"] == "missing":
+        raise RuntimeError(f"OT-signatures ontbreken ({st['detail']}); het lab werkt hier niet zonder. "
+                           "Los de FortiGuard-verbinding op en draai de provisioning opnieuw, of start "
+                           "'OT-signatures bijwerken' in de controller.")
+
+
 def ensure_api_key(log, topo):
     if get_state().get("fgt_api_key"):
         return
@@ -555,6 +672,10 @@ def provision(log, topo):
     ensure_admin_password(log, topo)
     api = Api(topo)
     suppress_setup_wizard(log, api)
+    # De OT-pakketten moeten er zijn vóór de policy-set: _resolve_ot_apps zoekt
+    # de OT-applicaties in de database, en zonder pakketten blijft de
+    # read-only-blokkade leeg.
+    ensure_ot_signatures(log, topo)
     ensure_aliases(log, api, topo)
     vpatch = enable_ot_features(log, api, topo)
     segs = segment_map(topo)

@@ -111,6 +111,24 @@ die niet volledig staat.
 
 ![System > FortiGuard: IPS en Operational Technology (OT) Security Service op Licensed](img/fgt-licentie.jpg)
 
+- **Zijn de OT-pakketten geladen?** Een geldige licentie is niet genoeg: de FortiGate
+  moet de pakketten ook hebben gedownload. Klap in *System > FortiGuard* de kaart
+  *Operational Technology (OT) Security Service* open: **OT device identification**
+  en **OT vulnerability correlation & virtual patching signatures** moeten een
+  versie hoger dan `0.00000` hebben. Zonder deze pakketten herkent de FortiGate
+  Modbus en S7 niet (het verkeer heet dan `unknown-<nummer>`) en falen de OT-tests.
+- **Controleert de controller dit ook?** Ja, op drie plekken:
+  - de tegel **OT-signatures** in de Lab-tab (groen is geladen, rood ontbreekt);
+  - de knop **OT-signatures bijwerken** onder de Lab-tab: start een FortiGuard-update
+    en wacht tot de pakketten er zijn;
+  - de eerste test in het Testcenter, `ot-signatures`. Als die rood is, zijn de
+    andere uitkomsten niet te vertrouwen.
+
+  De provisioning start zelf een update voordat de policies worden aangemaakt en
+  stopt met een foutmelding als de pakketten daarna nog ontbreken. Bijna altijd is
+  dan de FortiGuard-verbinding het probleem: controleer DNS, de default route en of
+  de FortiGate naar `update.fortiguard.net` kan.
+
 ---
 
 ## Hoofdstuk 0: Rondleiding over de vloer

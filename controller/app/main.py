@@ -363,6 +363,22 @@ def update_sims():
     return _start("Simulators bijwerken", deployer.update_simulators)
 
 
+@app.post("/api/signatures/check")
+def signatures_check():
+    """Zijn de OT-pakketten (device identification, virtual patching) geladen?"""
+    try:
+        return fortigate.ot_signature_status(load_topology())
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"FortiGate niet bereikbaar: {e}")
+
+
+@app.post("/api/signatures/update")
+def signatures_update():
+    """Update-ronde: FortiGuard-update starten en wachten tot de OT-pakketten geladen zijn."""
+    return _start("OT-signatures bijwerken",
+                  lambda log: fortigate.update_ot_signatures(log, load_topology(), attempts=2))
+
+
 class Destroy(BaseModel):
     template: bool = False
     network: bool = False

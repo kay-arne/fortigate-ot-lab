@@ -12,6 +12,16 @@
 # 'Alle tests draaien' over: zo'n demo wijzigt tijdelijk de FortiGate-config.
 
 scenarios:
+  # --- Voorbereiding ------------------------------------------------------
+  - id: ot-signatures
+    group: Voorbereiding
+    title: "FortiGate heeft de OT-signatures geladen"
+    from: controller
+    check: ot-signatures
+    run: "FortiGuard-pakketten: OT device identification, virtual patching"
+    expect: allowed
+    why: "Zonder deze pakketten herkent de FortiGate Modbus en S7 niet en falen de OT-tests."
+
   # --- Segmentatie (IEC 62443 zones & conduits) ---------------------------
   - id: it-to-plc
     group: Segmentatie
