@@ -181,6 +181,17 @@ scenarios:
     why: "Demo: zonder de write-blokkade loopt de tank over. Policy en setpoint worden daarna hersteld."
     logs: [app-ctrl]
 
+  - id: plc-dos-vpatch
+    group: OT deep inspection
+    title: "Virtual patching: Force-Listen-Only DoS op de PLC"
+    from: controller
+    check: plc-dos-vpatch
+    manual: true
+    run: "modbus-forcelisten 10.10.0.10 zonder -> met virtual patch"
+    expect: allowed
+    why: "Dezelfde Modbus FC08-aanval: zonder patch valt de PLC stil, met de FortiGuard-signature Modbus.TCP.Force.Listen.Only (ID 10003675) wordt hij geblokkeerd. Policy wordt daarna hersteld."
+    logs: [ips]
+
   # --- Uitbraak naar internet ---------------------------------------------
   - id: plc-to-internet
     group: Uitbraak naar internet

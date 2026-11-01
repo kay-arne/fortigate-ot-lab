@@ -211,9 +211,66 @@ def check_break_readonly(log, topo) -> dict:
     return res
 
 
+VPATCH_POLICY = "L3->L1 Modbus read-only"
+VPATCH_PLC = "10.10.0.10"       # tank-PLC
+VPATCH_ATTACKER = "probe-ops"   # L3, heeft het Modbus-conduit naar de PLC
+VPATCH_RECOVER = 24             # > otsim LISTEN_ONLY_SECONDS, zodat de PLC herstelt
+
+
+def _plc_reachable(node, ip) -> bool:
+    return bool(run_command(node, f"modbus-read {ip} 0 1").get("ok"))
+
+
+def _poll_plc(node, ip, want_up: bool, log, tries=6) -> bool:
+    """Wacht tot de PLC de gewenste toestand heeft (bereikbaar of stil)."""
+    for _ in range(tries):
+        if _plc_reachable(node, ip) == want_up:
+            return True
+        time.sleep(2)
+    return False
+
+
+def check_plc_dos_vpatch(log, topo) -> dict:
+    """FortiGuard virtual patching: dezelfde Force-Listen-Only-aanval (Modbus
+    FC08) eerst zonder, dan met de virtual-patch-signature op de L3->L1-policy.
+    Zonder patch valt de PLC stil; met patch (Modbus.TCP.Force.Listen.Only,
+    ID 10003675) wordt het pakket geblokkeerd en blijft de PLC staan."""
+    before = fortigate.policy_vpatch(topo, VPATCH_POLICY, "")
+    log(f"  virtual patch tijdelijk UIT op policy '{VPATCH_POLICY}' (stond op {before})")
+    phase1 = phase2 = False
+    atk2 = {}
+    try:
+        time.sleep(5)  # FortiGate laadt de policy opnieuw
+        log(f"  PLC vooraf: {'bereikbaar' if _plc_reachable(VPATCH_ATTACKER, VPATCH_PLC) else 'niet bereikbaar'}")
+
+        log("  fase 1 - aanval zonder virtual patch")
+        atk1 = run_command(VPATCH_ATTACKER, f"modbus-forcelisten {VPATCH_PLC}")
+        log(f"    {atk1.get('detail')}")
+        phase1 = _poll_plc(VPATCH_ATTACKER, VPATCH_PLC, want_up=False, log=log)
+        log(f"    PLC is {'stilgevallen (DoS geslaagd)' if phase1 else 'nog bereikbaar (onverwacht)'}")
+        log(f"  wacht tot de PLC vanzelf herstelt (~{VPATCH_RECOVER} s)")
+        time.sleep(VPATCH_RECOVER)
+
+        fortigate.policy_vpatch(topo, VPATCH_POLICY, before or fortigate.VPATCH_PROFILE)
+        log("  fase 2 - virtual patch weer AAN, zelfde aanval")
+        time.sleep(5)
+        atk2 = run_command(VPATCH_ATTACKER, f"modbus-forcelisten {VPATCH_PLC}")
+        log(f"    {atk2.get('detail')}")
+        phase2 = _poll_plc(VPATCH_ATTACKER, VPATCH_PLC, want_up=True, log=log)
+        log(f"    PLC {'bleef bereikbaar (aanval geblokkeerd)' if phase2 else 'viel alsnog stil (onverwacht)'}")
+    finally:
+        fortigate.policy_vpatch(topo, VPATCH_POLICY, before or fortigate.VPATCH_PROFILE)
+        log(f"  policy '{VPATCH_POLICY}' virtual-patch hersteld naar {before or fortigate.VPATCH_PROFILE}")
+        _poll_plc(VPATCH_ATTACKER, VPATCH_PLC, want_up=True, log=log)
+
+    detail = (("patch uit: PLC viel stil" if phase1 else "patch uit: PLC bleef staan (onverwacht)")
+              + "; " + ("patch aan: geblokkeerd, PLC bleef up" if phase2 else "patch aan: PLC viel alsnog stil (onverwacht)"))
+    return {"ok": phase1 and phase2, "detail": detail, "srcip": atk2.get("srcip")}
+
+
 CHECKS = {"assets": check_assets, "contractor-login": check_contractor_login,
           "contractor-no-mfa": lambda log, topo: check_contractor_login(log, topo, mfa=False),
-          "break-readonly": check_break_readonly}
+          "break-readonly": check_break_readonly, "plc-dos-vpatch": check_plc_dos_vpatch}
 
 
 def run_all(log):

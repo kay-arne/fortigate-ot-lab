@@ -675,6 +675,18 @@ def policy_app_list(topo, name: str, profile: str | None = None) -> str | None:
     return found[0].get("application-list") or None
 
 
+def policy_vpatch(topo, name: str, profile: str | None = None) -> str | None:
+    """Virtual-patch-profiel van een policy (op naam); met profile wordt het gezet
+    ("" haalt het eraf). Geeft het profiel van vóór de wijziging terug."""
+    api = Api(topo)
+    found = api.get("cmdb/firewall/policy", filter=f"name=={name}").get("results", [])
+    if not found:
+        raise RuntimeError(f"policy '{name}' niet gevonden")
+    if profile is not None:
+        api.put(f"cmdb/firewall/policy/{found[0]['policyid']}", {"virtual-patch-profile": profile})
+    return found[0].get("virtual-patch-profile") or None
+
+
 def query_logs(topo, kind: str, srcip: str, since: float, rows=50, dstip: str | None = None) -> list[dict]:
     """kind: traffic/forward | app-ctrl | ips. Meerdere filters zijn een AND."""
     api = Api(topo)

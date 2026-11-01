@@ -10,6 +10,7 @@ Field I/O 'motor_drive':   HR0 snelheid, HR1 setpoint, coil0 run
 import asyncio
 import logging
 import random
+import time
 
 from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.datastore import (ModbusSequentialDataBlock, ModbusServerContext,
@@ -17,6 +18,33 @@ from pymodbus.datastore import (ModbusSequentialDataBlock, ModbusServerContext,
 from pymodbus.server import StartAsyncTcpServer
 
 log = logging.getLogger("otsim.modbus")
+
+# Force Listen Only Mode (Modbus FC08, sub-functie 0x0004): een device dat dit
+# commando krijgt stopt met reageren op het netwerk tot het herstart wordt. Het
+# staat zo in de Modbus-spec en is een klassieke OT-DoS tegen ongepatchte PLC's.
+# Deze devices zijn er kwetsbaar voor; het procesmodel loopt intern door, maar de
+# HMI en historian zien de PLC niet meer. De FortiGuard virtual-patch-signature
+# Modbus.TCP.Force.Listen.Only (ID 10003675) blokkeert het pakket vóór de PLC.
+LISTEN_ONLY_SECONDS = 20
+
+
+def _listen_only_hooks(name):
+    """pymodbus-hooks die Force Listen Only Mode nabootsen: het frame herkennen
+    (request_tracer) en daarna LISTEN_ONLY_SECONDS lang elk antwoord onderdrukken
+    (response_manipulator)."""
+    state = {"until": 0.0}
+
+    def tracer(request, *addr):
+        if getattr(request, "function_code", None) == 8 and getattr(request, "sub_function_code", None) == 4:
+            state["until"] = time.monotonic() + LISTEN_ONLY_SECONDS
+            log.warning("%s: Force Listen Only ontvangen -- negeert Modbus %d s", name, LISTEN_ONLY_SECONDS)
+
+    def manip(response):
+        if time.monotonic() < state["until"]:
+            return b"", True  # listen-only: geen antwoord sturen
+        return response, False
+
+    return tracer, manip
 
 
 def _context():
@@ -63,10 +91,13 @@ def run_io(cfg):
     store, ctx = _context()
     kind = cfg["args"].get("kind", "level_sensor")
 
+    tracer, manip = _listen_only_hooks(cfg["name"])
+
     async def main():
         asyncio.create_task(_io_loop(store, kind))
         log.info("field I/O %s op :502", kind)
-        await StartAsyncTcpServer(context=ctx, address=("0.0.0.0", 502))
+        await StartAsyncTcpServer(context=ctx, address=("0.0.0.0", 502),
+                                  request_tracer=tracer, response_manipulator=manip)
     asyncio.run(main())
 
 
@@ -116,8 +147,11 @@ def run_plc(cfg):
     store, ctx = _context()
     args = cfg["args"]
 
+    tracer, manip = _listen_only_hooks(cfg["name"])
+
     async def main():
         asyncio.create_task(_plc_loop(store, args.get("process", "tank"), args.get("io")))
         log.info("Modbus PLC (%s) op :502", args.get("process"))
-        await StartAsyncTcpServer(context=ctx, address=("0.0.0.0", 502))
+        await StartAsyncTcpServer(context=ctx, address=("0.0.0.0", 502),
+                                  request_tracer=tracer, response_manipulator=manip)
     asyncio.run(main())

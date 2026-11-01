@@ -94,6 +94,25 @@ geheim, zodat je het ook in een authenticator-app kunt zetten.
 
 ---
 
+## Voordat je begint: werkt de FortiGate?
+
+Twee snelle controles, zodat je niet halverwege het lab vastloopt op een FortiGate
+die niet volledig staat.
+
+- **Bereikbaar?** Open de Lab-tab. De FortiGate-kaart is groen zolang zijn REST API
+  antwoordt. Is hij rood, wacht dan tot de VM klaar is met opstarten of rol opnieuw uit.
+- **Licenties actief?** Log in op de FortiGate-GUI (`https://<WAN-IP>`) en ga naar
+  *System > FortiGuard*. Onder **FortiGuard Security Services** moeten in elk geval
+  deze twee op *Licensed* staan:
+  - **Intrusion Prevention System (IPS)** — de signatures voor hoofdstuk 4 en 7;
+  - **Operational Technology (OT) Security Service** — de OT-/ICS-signatures én
+    virtual patching. Zonder deze licentie herkent de FortiGate de OT-protocollen
+    niet en werkt de virtual-patch-demo uit hoofdstuk 7 niet.
+
+![System > FortiGuard: IPS en Operational Technology (OT) Security Service op Licensed](img/fgt-licentie.jpg)
+
+---
+
 ## Hoofdstuk 0: Rondleiding over de vloer
 
 *22:00. Sanne leidt je rond. "Alles wat je vannacht ziet, draait echt: de tank vult,
@@ -382,6 +401,26 @@ en die mag over HTTP bij het MES.*
 - Koppel het terug aan hoofdstuk 4: welk verkeer mag überhaupt bij een kwetsbaar
   systeem komen? Virtual patching inspecteert juist dat toegestane verkeer.
 
+**Actie — nu voor de PLC zelf**
+- Testcenter: **Virtual patching: Force-Listen-Only DoS op de PLC** (`plc-dos-vpatch`).
+  Deze demo doet dezelfde aanval twee keer vanaf L3 (`probe-ops`) op de tank-PLC:
+  - *eerst met virtual patching uit*: een Modbus **Force Listen Only Mode** (FC08,
+    sub-functie 0x0004) bereikt de PLC. Dat is een echte, in de Modbus-spec
+    beschreven DoS: de PLC stopt met reageren op het netwerk. Kijk in de SCADA HMI —
+    de tank-PLC valt ~20 s weg. Het proces loopt intern door, maar je bent blind;
+  - *dan met virtual patching aan*: precies dezelfde aanval wordt nu door de
+    FortiGuard-signature **Modbus.TCP.Force.Listen.Only** (ID 10003675) geblokkeerd
+    voordat hij de PLC bereikt. De PLC blijft bereikbaar.
+  De demo zet het virtual-patch-profiel alleen op de L3→L1-policy even uit en daarna
+  weer aan; na afloop staat alles zoals het was.
+- Bekijk in *Log & Report > Security Events* de blokkade: signature
+  `Modbus.TCP.Force.Listen.Only`, actie *dropped*, afkomstig van het L3-bron-IP.
+- Open *Security Profiles > Virtual Patching Signatures* en zoek op `modbus`: dit is
+  geen zelfgeschreven regel maar een kant-en-klare FortiGuard-signature (Action
+  *Block*), net als de duizenden CVE-signatures voor CODESYS, Siemens en Schneider.
+
+![Virtual Patching Signatures: de Modbus-signatures, waaronder Force.Listen.Only (Block)](img/fgt-vpatch-sigs.jpg)
+
 **Onthulling**
 De firewall-policy laat de verbinding toe, maar de payload bereikt het MES niet:
 de FortiGate herkent het misbruik van de kwetsbaarheid in het verkeer en gooit
@@ -396,10 +435,13 @@ Security Service.
 - Virtual patching vervangt de echte patch niet: plan hem alsnog in voor de stop.
 - IEC 62443: FR3 *system integrity* en het patchmanagement uit 62443-2-3.
 
-> De demo gebruikt Shellshock omdat die signature betrouwbaar afgaat op één
-> HTTP-header. De FortiGuard-database van dit lab bevat voor Modbus en S7 alleen
-> policy-signatures (zoals in hoofdstuk 4), geen exploit-signatures die je met
-> een simpele request kunt laten afgaan.
+> Shellshock is het IT/web-voorbeeld (één HTTP-header), `plc-dos-vpatch` het
+> OT-voorbeeld op het Modbus-protocol zelf. Beide signatures komen kant-en-klaar uit
+> FortiGuard en vragen de **OT Security Service** (zie "Voordat je begint"). De
+> virtual-patch-database bevat daarnaast duizenden CVE-signatures voor concrete
+> PLC-firmware (CODESYS, Siemens, Schneider); die gaan pas af op het exacte
+> exploit-verkeer van dat product, dus met de generieke gesimuleerde PLC's in dit
+> lab zie je díe niet vanzelf afgaan.
 
 ## Afsluiting: het rapport voor Mark
 
@@ -408,8 +450,9 @@ wil voor het managementoverleg één overzicht.*
 
 **Actie**
 - Draai in het Testcenter **alle tests**. Elke test is groen als de uitkomst
-  overeenkomt met de verwachting (toegestaan of geblokkeerd). De demo
-  `break-readonly` wordt daarbij overgeslagen.
+  overeenkomt met de verwachting (toegestaan of geblokkeerd). De demo's
+  `break-readonly` en `plc-dos-vpatch` wijzigen de config tijdelijk en worden
+  daarbij overgeslagen; die draai je apart.
 - Loop de resultaten langs met de logs als bewijs.
 
 ![Testcenter: per test de verwachting, de uitkomst en de bijbehorende FortiGate-logregels](img/02-testcenter.jpg)
@@ -430,9 +473,10 @@ wil voor het managementoverleg één overzicht.*
 
 ## Uitbreidingen (nog niet in het lab)
 
-- **Virtual patching op een OT-exploit** (hoofdstuk 7): de ICS-signatures in de
-  FortiGuard-database van dit lab zijn leverancierspecifiek (InduSoft, IGSS,
-  CitectSCADA, CoDeSys) en zitten op hun eigen protocollen of URL-paden. Voor
-  Modbus, S7 en OPC UA zijn er alleen policy-signatures. Een OT-variant van
-  `shellshock-mes` vraagt daarom een gesimuleerd device van zo'n leverancier, met
-  een request die exact op de signature past.
+- **Virtual patching op een product-specifieke CVE** (uitbreiding op hoofdstuk 7):
+  hoofdstuk 7 gebruikt `Modbus.TCP.Force.Listen.Only` — een FortiGuard-signature op
+  het Modbus-protocol zelf, die afgaat op onze generieke PLC. De virtual-patch-database
+  bevat daarnaast duizenden CVE-signatures voor concrete firmware (CODESYS, Siemens,
+  Schneider). Die laten afgaan vraagt een gesimuleerd device van die leverancier met
+  een request die exact op de signature past — een mooie volgende stap, maar niet
+  nodig om het principe te tonen.
