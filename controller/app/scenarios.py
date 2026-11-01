@@ -255,7 +255,7 @@ def check_plc_dos_vpatch(log, topo) -> dict:
 
         fortigate.policy_ips_sensor(topo, VPATCH_POLICY, fortigate.OT_IPS_SENSOR)
         log("  fase 2 - Force-Listen-block (virtual patch) weer AAN, zelfde aanval")
-        time.sleep(5)
+        time.sleep(12)  # de IPS-engine heeft enkele seconden nodig voor de nieuwe sensor actief is
         atk2 = run_command(VPATCH_ATTACKER, f"modbus-forcelisten {VPATCH_PLC}")
         log(f"    {atk2.get('detail')}")
         phase2 = _poll_plc(VPATCH_ATTACKER, VPATCH_PLC, want_up=True, log=log)
