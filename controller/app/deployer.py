@@ -378,11 +378,15 @@ def network_diagnosis(h, vmid) -> list[str]:
 # devices + probes
 # --------------------------------------------------------------------------
 def node_mac(node) -> str:
-    """Vast MAC-adres per IP: 02:4F:54 ('OT', locally administered) + de laatste
-    drie octetten. Zo blijft een device na een herinstallatie hetzelfde asset op
-    de FortiGate in plaats van een nieuw MAC naast het oude."""
+    """Vast MAC-adres per IP, zodat een device na een herinstallatie hetzelfde asset
+    blijft. De Modbus-PLC's doen zich voor als een Schneider Modicon M580 en krijgen
+    daarom de Schneider/Telemecanique-OUI 00:80:F4: zo herkent ook de MAC Address
+    Database van de FortiGate ze als Schneider, passend bij de FC43-identiteit -- de
+    voorwaarde voor device-correlatie en virtual patching. Andere nodes houden de
+    neutrale, locally-administered OUI 02:4F:54 ('OT')."""
     o = [int(x) for x in node["ip"].split(".")]
-    return "02:4F:54:" + ":".join(f"{x:02X}" for x in o[1:])
+    oui = "00:80:F4" if node.get("role") == "modbus_plc" else "02:4F:54"
+    return oui + ":" + ":".join(f"{x:02X}" for x in o[1:])
 
 
 def node_hwaddr(node) -> str:
@@ -406,7 +410,15 @@ def deploy_node(log, topo, node):
     vmid = node["vmid"]
     res = topo["resources"]["probe" if node["kind"] == "probe" else "device"]
     if h.exists(vmid):
-        log(f"{node['hostname']} ({vmid}) bestaat al")
+        want = node_mac(node)
+        if node_hwaddr(node).lower() != want.lower():
+            log(f"{node['hostname']} ({vmid}) bestaat al; MAC bijwerken naar {want}")
+            h.run(["pct", "set", str(vmid), "--net0",
+                   f"name=eth0,bridge={seg['bridge']},hwaddr={want},"
+                   f"ip={node['ip']}/{prefixlen(seg['subnet'])},gw={seg['gateway']}"])
+            h.run(["pct", "reboot", str(vmid)], check=False)
+        else:
+            log(f"{node['hostname']} ({vmid}) bestaat al")
         return
     tpl = template_vmid(topo)
     log(f"{node['hostname']} ({vmid}) → {seg['name']} {node['ip']}")
