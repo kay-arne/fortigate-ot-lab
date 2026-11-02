@@ -16,9 +16,13 @@ from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.datastore import (ModbusSequentialDataBlock, ModbusServerContext,
                                 ModbusSlaveContext)
 from pymodbus.device import ModbusDeviceIdentification
+from pymodbus.pdu import ModbusRequest, ModbusResponse
 from pymodbus.server import StartAsyncTcpServer
 
 log = logging.getLogger("otsim.modbus")
+
+# Eén PLC per proces: gedeelde 'stil'-toestand voor de hooks en de UMAS-handler.
+_DOWN = {"until": 0.0, "name": "plc"}
 
 
 def _plc_identity():
@@ -44,27 +48,70 @@ def _plc_identity():
 # HMI en historian zien de PLC niet meer. De FortiGuard virtual-patch-signature
 # Modbus.TCP.Force.Listen.Only (ID 10003675) blokkeert het pakket vóór de PLC.
 LISTEN_ONLY_SECONDS = 20
+UMAS_FC = 0x5A       # Modbus-functiecode die UMAS (Schneider) draagt
+UMAS_DOS = 0x11      # RELEASE_PLC_RESERVATION: de M580 UMAS-DoS (CVE-2018-7846)
+
+
+def _go_down(reason):
+    _DOWN["until"] = time.monotonic() + LISTEN_ONLY_SECONDS
+    log.warning("%s: %s -- PLC valt %d s stil", _DOWN["name"], reason, LISTEN_ONLY_SECONDS)
+
+
+class _UmasResponse(ModbusResponse):
+    function_code = UMAS_FC
+
+    def __init__(self, payload=b"\xfe\x00", **kwargs):
+        super().__init__(**kwargs)
+        self.payload = payload
+
+    def encode(self):
+        return self.payload
+
+    def decode(self, data):
+        self.payload = data
+
+
+class _UmasRequest(ModbusRequest):
+    """Laat de PLC UMAS (Modbus FC 0x5A) 'spreken', zodat de FortiGate de sessie als
+    UMAS herkent. Alleen de DoS-functie (0x11) laat de PLC uitvallen; de handshake
+    (INIT_COMM 0x01, TAKE_PLC_RESERVATION 0x10) wordt beantwoord zodat de aanvaller
+    een echte UMAS-sessie kan opzetten."""
+    function_code = UMAS_FC
+    _rtu_frame_size = 0  # TCP: lengte komt uit de MBAP-header
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.pairing, self.umas_fc, self.umas_data = 0, None, b""
+
+    def decode(self, data):
+        self.pairing = data[0] if len(data) > 0 else 0
+        self.umas_fc = data[1] if len(data) > 1 else None
+        self.umas_data = data[2:]
+
+    def encode(self):
+        return bytes([self.pairing, self.umas_fc or 0]) + self.umas_data
+
+    def execute(self, context):
+        if self.umas_fc == UMAS_DOS:
+            _go_down("UMAS RELEASE_PLC_RESERVATION (CVE-2018-7846 DoS)")
+            return _UmasResponse(b"\xfe\x00")
+        if self.umas_fc == 0x10:  # reservation -> geef een session key terug
+            return _UmasResponse(b"\xfe\x01")
+        return _UmasResponse(b"\xfe\x00")  # INIT_COMM e.a.: OK
 
 
 def _dos_hooks(name):
-    """pymodbus-hooks die een kwetsbare PLC nabootsen: bij een DoS-pakket valt de
-    PLC LISTEN_ONLY_SECONDS lang stil (geen antwoorden meer). Herkende aanvallen:
-      - UMAS (Modbus FC 0x5A): Schneider-commando's, o.a. de M580 UMAS-DoS
-        (CVE-2018-7846). pymodbus kent FC 0x5A niet en geeft een IllegalFunctionRequest
-        met function_code 90; dat is onze trigger.
-      - Force Listen Only Mode (FC08, sub 0x0004): klassieke Modbus-DoS."""
-    state = {"until": 0.0}
+    """Force Listen Only Mode (FC08, sub 0x0004) nabootsen: herken het frame en laat
+    de PLC stilvallen. UMAS (FC 0x5A) gaat via _UmasRequest. De response_manipulator
+    onderdrukt alle antwoorden zolang de PLC 'stil' is."""
+    _DOWN["name"] = name
 
     def tracer(request, *addr):
-        fc = getattr(request, "function_code", None)
-        sub = getattr(request, "sub_function_code", None)
-        if fc == 90 or (fc == 8 and sub == 4):
-            state["until"] = time.monotonic() + LISTEN_ONLY_SECONDS
-            attack = "UMAS-commando (FC 0x5A)" if fc == 90 else "Force Listen Only"
-            log.warning("%s: %s ontvangen -- PLC valt %d s stil", name, attack, LISTEN_ONLY_SECONDS)
+        if getattr(request, "function_code", None) == 8 and getattr(request, "sub_function_code", None) == 4:
+            _go_down("Force Listen Only ontvangen")
 
     def manip(response):
-        if time.monotonic() < state["until"]:
+        if time.monotonic() < _DOWN["until"]:
             return b"", True  # stil: geen antwoord sturen
         return response, False
 
@@ -177,5 +224,6 @@ def run_plc(cfg):
         asyncio.create_task(_plc_loop(store, args.get("process", "tank"), args.get("io")))
         log.info("Modbus PLC (%s) op :502, device-id Modicon M580", args.get("process"))
         await StartAsyncTcpServer(context=ctx, address=("0.0.0.0", 502), identity=_plc_identity(),
+                                  custom_functions=[_UmasRequest],
                                   request_tracer=tracer, response_manipulator=manip)
     asyncio.run(main())

