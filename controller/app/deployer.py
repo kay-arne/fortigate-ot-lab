@@ -377,15 +377,26 @@ def network_diagnosis(h, vmid) -> list[str]:
 # --------------------------------------------------------------------------
 # devices + probes
 # --------------------------------------------------------------------------
+# OUI (eerste 3 MAC-octetten) per rol = de fabrikant die het device simuleert, zodat
+# de MAC Address Database van de FortiGate elk OT-device bij de juiste vendor indeelt
+# (passend bij het protocol/identiteit). Dat is mede de voorwaarde voor
+# device-correlatie en virtual patching. IT-hosts, servers en probes blijven neutraal.
+VENDOR_OUI = {
+    "modbus_plc": "00:80:F4",   # Schneider Electric / Telemecanique (Modicon M580)
+    "io_device":  "00:80:F4",   # Schneider field I/O
+    "hmi":        "00:80:F4",   # Schneider (Magelis HMI)
+    "opcua_gw":   "00:80:F4",   # Schneider OPC UA gateway
+    "s7_plc":     "00:1B:1B",   # Siemens AG (S7)
+}
+NEUTRAL_OUI = "02:4F:54"        # neutraal, locally administered ('OT'); IT-hosts/probes
+
+
 def node_mac(node) -> str:
     """Vast MAC-adres per IP, zodat een device na een herinstallatie hetzelfde asset
-    blijft. De Modbus-PLC's doen zich voor als een Schneider Modicon M580 en krijgen
-    daarom de Schneider/Telemecanique-OUI 00:80:F4: zo herkent ook de MAC Address
-    Database van de FortiGate ze als Schneider, passend bij de FC43-identiteit -- de
-    voorwaarde voor device-correlatie en virtual patching. Andere nodes houden de
-    neutrale, locally-administered OUI 02:4F:54 ('OT')."""
+    blijft. De OUI volgt de gesimuleerde fabrikant (VENDOR_OUI), zodat de FortiGate
+    het device ook op MAC bij de juiste vendor herkent; overige nodes neutraal."""
     o = [int(x) for x in node["ip"].split(".")]
-    oui = "00:80:F4" if node.get("role") == "modbus_plc" else "02:4F:54"
+    oui = VENDOR_OUI.get(node.get("role"), NEUTRAL_OUI)
     return oui + ":" + ":".join(f"{x:02X}" for x in o[1:])
 
 
