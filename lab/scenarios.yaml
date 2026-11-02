@@ -193,13 +193,13 @@ scenarios:
 
   - id: plc-dos-vpatch
     group: OT deep inspection
-    title: "Virtual patching: Force-Listen-Only DoS op de PLC"
+    title: "Virtual patching: Schneider M580 UMAS-DoS (CVE-2018-7846)"
     from: controller
     check: plc-dos-vpatch
     manual: true
-    run: "modbus-forcelisten 10.10.0.10 zonder -> met virtual patch"
+    run: "umas-dos 10.10.0.10 ongepatcht -> met virtual patching"
     expect: allowed
-    why: "Dezelfde Modbus FC08-aanval: zonder block valt de PLC stil, met de FortiGuard-signature Modbus.TCP.Force.Listen.Only (ID 11521, in de OT-IPS-sensor) wordt hij geblokkeerd. Policy wordt daarna hersteld."
+    why: "De FortiGate herkent de PLC als Modicon M580. Dezelfde UMAS-DoS valt de PLC stil zonder patch; met virtual patching blokkeert de FortiGuard-CVE-signature het exploit-frame. Policy wordt daarna hersteld."
     logs: [ips]
 
   # --- Uitbraak naar internet ---------------------------------------------

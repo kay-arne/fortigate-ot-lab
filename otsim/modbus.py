@@ -46,20 +46,26 @@ def _plc_identity():
 LISTEN_ONLY_SECONDS = 20
 
 
-def _listen_only_hooks(name):
-    """pymodbus-hooks die Force Listen Only Mode nabootsen: het frame herkennen
-    (request_tracer) en daarna LISTEN_ONLY_SECONDS lang elk antwoord onderdrukken
-    (response_manipulator)."""
+def _dos_hooks(name):
+    """pymodbus-hooks die een kwetsbare PLC nabootsen: bij een DoS-pakket valt de
+    PLC LISTEN_ONLY_SECONDS lang stil (geen antwoorden meer). Herkende aanvallen:
+      - UMAS (Modbus FC 0x5A): Schneider-commando's, o.a. de M580 UMAS-DoS
+        (CVE-2018-7846). pymodbus kent FC 0x5A niet en geeft een IllegalFunctionRequest
+        met function_code 90; dat is onze trigger.
+      - Force Listen Only Mode (FC08, sub 0x0004): klassieke Modbus-DoS."""
     state = {"until": 0.0}
 
     def tracer(request, *addr):
-        if getattr(request, "function_code", None) == 8 and getattr(request, "sub_function_code", None) == 4:
+        fc = getattr(request, "function_code", None)
+        sub = getattr(request, "sub_function_code", None)
+        if fc == 90 or (fc == 8 and sub == 4):
             state["until"] = time.monotonic() + LISTEN_ONLY_SECONDS
-            log.warning("%s: Force Listen Only ontvangen -- negeert Modbus %d s", name, LISTEN_ONLY_SECONDS)
+            attack = "UMAS-commando (FC 0x5A)" if fc == 90 else "Force Listen Only"
+            log.warning("%s: %s ontvangen -- PLC valt %d s stil", name, attack, LISTEN_ONLY_SECONDS)
 
     def manip(response):
         if time.monotonic() < state["until"]:
-            return b"", True  # listen-only: geen antwoord sturen
+            return b"", True  # stil: geen antwoord sturen
         return response, False
 
     return tracer, manip
@@ -109,7 +115,7 @@ def run_io(cfg):
     store, ctx = _context()
     kind = cfg["args"].get("kind", "level_sensor")
 
-    tracer, manip = _listen_only_hooks(cfg["name"])
+    tracer, manip = _dos_hooks(cfg["name"])
 
     async def main():
         asyncio.create_task(_io_loop(store, kind))
@@ -165,7 +171,7 @@ def run_plc(cfg):
     store, ctx = _context()
     args = cfg["args"]
 
-    tracer, manip = _listen_only_hooks(cfg["name"])
+    tracer, manip = _dos_hooks(cfg["name"])
 
     async def main():
         asyncio.create_task(_plc_loop(store, args.get("process", "tank"), args.get("io")))

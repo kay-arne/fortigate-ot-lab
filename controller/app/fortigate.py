@@ -739,10 +739,13 @@ def provision(log, topo):
     api.upsert("cmdb/ips/sensor", OT_IPS_SENSOR, {
         "name": OT_IPS_SENSOR, "comment": "IT + OT signatures, block medium+ en Modbus Force-Listen",
         "entries": base_entries + [forcelisten]})
-    # Zelfde sensor zonder de Force-Listen-block, voor de virtual-patch-demo (plc-dos-vpatch).
+    # 'Ongepatchte' demo-sensor voor plc-dos-vpatch: inspecteert en logt wel, maar
+    # blokkeert niets. Zo komt de M580 UMAS-DoS er in de 'voor'-fase doorheen; met
+    # OT-IPS (block medium+) wordt dezelfde High/Critical-signature wel geblokkeerd.
     api.upsert("cmdb/ips/sensor", OT_IPS_SENSOR_NOVP, {
-        "name": OT_IPS_SENSOR_NOVP, "comment": "OT-IPS zonder Force-Listen-block (demo plc-dos-vpatch)",
-        "entries": base_entries})
+        "name": OT_IPS_SENSOR_NOVP, "comment": "Ongepatcht: OT-IPS dat detecteert maar niets blokkeert (demo)",
+        "entries": [{"id": 1, "severity": "info low medium high critical", "status": "enable",
+                     "action": "pass", "log": "enable"}]})
 
     log("VIP: remote access naar de DMZ jump host (WAN :2222 -> 22)")
     wan_ip = mgmt_ip(topo)

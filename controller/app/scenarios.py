@@ -243,22 +243,23 @@ def _poll_plc(node, ip, want_up: bool, log, tries=6) -> bool:
 
 
 def check_plc_dos_vpatch(log, topo) -> dict:
-    """Virtual patching: dezelfde Force-Listen-Only-aanval (Modbus FC08) eerst
-    zonder, dan met de FortiGuard-signature Modbus.TCP.Force.Listen.Only (ID
-    11521) op de L3->L1-policy. We wisselen de IPS-sensor van de policy tussen een
-    variant zonder en met de Force-Listen-block. Zonder valt de PLC stil; met
-    block wordt het pakket geblokkeerd en blijft de PLC staan."""
+    """Virtual patching: dezelfde Schneider UMAS-DoS (CVE-2018-7846, Modbus FC 0x5A)
+    tegen de als Modicon M580 herkende PLC, eerst zonder en dan met virtual patching.
+    We wisselen de IPS-sensor van de L3->L1-policy tussen een variant die wel
+    detecteert maar niets blokkeert (ongepatcht) en OT-IPS (dat de High/Critical
+    M580-CVE-signature blokkeert). Zonder patch valt de PLC stil; met patch wordt
+    het exploit-frame gedropt en blijft de PLC staan."""
     before = fortigate.policy_ips_sensor(topo, VPATCH_POLICY, fortigate.OT_IPS_SENSOR_NOVP)
     log(f"  IPS-sensor op '{VPATCH_POLICY}' tijdelijk naar {fortigate.OT_IPS_SENSOR_NOVP} "
-        f"(geen Force-Listen-block); stond op {before}")
+        f"(ongepatcht: detecteert maar blokkeert niet); stond op {before}")
     phase1 = phase2 = False
     atk2 = {}
     try:
         time.sleep(5)  # FortiGate laadt de policy opnieuw
         log(f"  PLC vooraf: {'bereikbaar' if _plc_reachable(VPATCH_ATTACKER, VPATCH_PLC) else 'niet bereikbaar'}")
 
-        log("  fase 1 - aanval zonder virtual patch")
-        atk1 = run_command(VPATCH_ATTACKER, f"modbus-forcelisten {VPATCH_PLC}")
+        log("  fase 1 - UMAS-DoS zonder virtual patch")
+        atk1 = run_command(VPATCH_ATTACKER, f"umas-dos {VPATCH_PLC}")
         log(f"    {atk1.get('detail')}")
         phase1 = _poll_plc(VPATCH_ATTACKER, VPATCH_PLC, want_up=False, log=log)
         log(f"    PLC is {'stilgevallen (DoS geslaagd)' if phase1 else 'nog bereikbaar (onverwacht)'}")
@@ -266,9 +267,9 @@ def check_plc_dos_vpatch(log, topo) -> dict:
         time.sleep(VPATCH_RECOVER)
 
         fortigate.policy_ips_sensor(topo, VPATCH_POLICY, fortigate.OT_IPS_SENSOR)
-        log("  fase 2 - Force-Listen-block (virtual patch) weer AAN, zelfde aanval")
+        log("  fase 2 - virtual patching AAN, zelfde UMAS-DoS")
         time.sleep(12)  # de IPS-engine heeft enkele seconden nodig voor de nieuwe sensor actief is
-        atk2 = run_command(VPATCH_ATTACKER, f"modbus-forcelisten {VPATCH_PLC}")
+        atk2 = run_command(VPATCH_ATTACKER, f"umas-dos {VPATCH_PLC}")
         log(f"    {atk2.get('detail')}")
         phase2 = _poll_plc(VPATCH_ATTACKER, VPATCH_PLC, want_up=True, log=log)
         log(f"    PLC {'bleef bereikbaar (aanval geblokkeerd)' if phase2 else 'viel alsnog stil (onverwacht)'}")
