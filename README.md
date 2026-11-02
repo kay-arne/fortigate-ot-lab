@@ -159,13 +159,16 @@ met een echte FortiGate-VM gedraaid**. Controleer bij de eerste uitrol vooral:
 - **OT-signatures**: application control-ID's worden opgezocht in de FortiGuard-database van de
   FortiGate (`/api/v2/cmdb/application/name`). Zonder actieve OT-licentie en een FortiGuard-update vindt
   de controller er geen; zet dan na de update *FortiGate policies opnieuw toepassen* aan.
-  De OT-pakketten (*IoT Detect Definitions*, *MAC Address Database*, *OT Detect Definitions*, *OT Patch
-  Definitions* en *OT Threat Definitions*) zijn een harde voorwaarde: de provisioning start zelf een FortiGuard-update vóór de policy-set en
-  stopt als ze daarna nog ontbreken. De Lab-tab toont de status (tegel **OT-signatures**), de knop
-  **OT-signatures bijwerken** start een nieuwe update-ronde en de Testcenter-test `ot-signatures`
-  controleert het. Een pakket op versie `0.00000` telt als niet geladen. De namen komen uit `diagnose autoupdate versions`;
-  herkent de controller ze niet, dan meldt hij dat en blokkeert niets (pas `OT_PACKAGES` in
-  `controller/app/fortigate.py` aan).
+  De OT-pakketten (*OT Detect Definitions*, *OT Patch Definitions*, *OT Threat Definitions*, *IoT Detect
+  Definitions*) zijn een harde voorwaarde. De online FortiGuard-update is in een lab te traag en
+  onbetrouwbaar; daarom levert de controller ze **offline** aan: download de `.pkg`-bestanden van
+  [support.fortinet.com](https://support.fortinet.com/support/#/downloads/service) (*Downloads → Service
+  Updates*: `OTDB`, `OTDP`, `ISDB`, `IOTD`), upload ze op het *Instellingen*-tabblad onder **OT-signatures**
+  (ze blijven lokaal in de controller, niet in git), en de provisioning pusht ze vóór de policy-set naar de
+  FortiGate (monitor-API `license/database/upgrade`). Ontbreken ze, dan stopt de provisioning. De Lab-tab
+  toont de status (tegel **OT-signatures**) en de knop **OT-signatures uploaden** pusht ze opnieuw; de
+  Testcenter-test `ot-signatures` controleert of ze geladen zijn (versie boven `0.00000`). De `db_name` per
+  pakket zit in `SIG_DB_NAME` in `controller/app/fortigate.py`.
 - `config ips global / set exclude-signatures none` neemt OT-signatures op in IPS; controleer of je
   FortiOS-build dit zo verwacht.
 - Het LXC-template haalt eenmalig packages op via `vmbr0` (DHCP). Geen DHCP? Zet `template_net` in

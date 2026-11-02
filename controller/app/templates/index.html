@@ -191,6 +191,23 @@
       </div>
       <div class="actions"><button class="primary" data-save="license">Opslaan</button><span class="result" data-result="license"></span></div>
     </div>
+
+    <div class="card">
+      <h2>OT-signatures</h2>
+      <p class="help">De FortiGate heeft de FortiGuard OT-pakketten nodig (device identification en
+        virtual patching). De online update is in een lab te traag, dus upload je de pakketten hier.
+        Download ze van <a href="https://support.fortinet.com/support/#/downloads/service" target="_blank"
+        rel="noopener">support.fortinet.com → Downloads → Service Updates</a>
+        (<code>OTDB</code>, <code>OTDP</code>, <code>ISDB</code>, <code>IOTD</code> <code>.pkg</code>-bestanden).
+        Ze blijven lokaal in de controller en worden bij het provisioneren naar de FortiGate gepusht.</p>
+      <div class="field">
+        <div class="row">
+          <input type="file" id="f-signatures" accept=".pkg" multiple>
+          <button id="btn-upload-signatures">Uploaden</button>
+        </div>
+        <div class="current">In de controller: <b id="cur-signatures">geen</b></div>
+      </div>
+    </div>
   </section>
 
   <!-- LAB -->
@@ -202,7 +219,7 @@
     <div class="toolbar">
       <button id="btn-deploy" class="primary">Volledig lab uitrollen</button>
       <button id="btn-update">Simulators bijwerken</button>
-      <button id="btn-signatures" title="FortiGuard-update op de FortiGate starten en wachten tot de OT-pakketten geladen zijn">OT-signatures bijwerken</button>
+      <button id="btn-signatures" title="De lokaal aangeleverde FortiGuard-.pkg's naar de FortiGate uploaden">OT-signatures uploaden</button>
       <button id="btn-destroy" class="danger">Alles afbreken…</button>
     </div>
     <div class="selbar">

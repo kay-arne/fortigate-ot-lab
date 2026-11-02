@@ -120,17 +120,20 @@ die niet volledig staat.
   Database*, *OT Detect*, *OT Patch* en *OT Threat Definitions*. Zonder deze pakketten
   herkent de FortiGate Modbus en S7 niet (het verkeer heet dan `unknown-<nummer>`) en
   falen de OT-tests.
+- **Hoe komen de pakketten op de FortiGate?** De online FortiGuard-update is in een lab
+  te traag. Daarom lever je ze offline aan: download de `.pkg`-bestanden van
+  support.fortinet.com (*Downloads → Service Updates*) en upload ze in de controller op
+  het *Instellingen*-tabblad onder **OT-signatures**. De provisioning pusht ze dan vóór
+  de policy-set naar de FortiGate.
 - **Controleert de controller dit ook?** Ja, op drie plekken:
   - de tegel **OT-signatures** in de Lab-tab (groen is geladen, rood ontbreekt);
-  - de knop **OT-signatures bijwerken** onder de Lab-tab: start een FortiGuard-update
-    en wacht tot de pakketten er zijn;
+  - de knop **OT-signatures uploaden** onder de Lab-tab: pusht de aangeleverde pakketten
+    opnieuw naar de FortiGate;
   - de eerste test in het Testcenter, `ot-signatures`. Als die rood is, zijn de
     andere uitkomsten niet te vertrouwen.
 
-  De provisioning start zelf een update voordat de policies worden aangemaakt en
-  stopt met een foutmelding als de pakketten daarna nog ontbreken. Bijna altijd is
-  dan de FortiGuard-verbinding het probleem: controleer DNS, de default route en of
-  de FortiGate naar `update.fortiguard.net` kan.
+  De provisioning stopt met een foutmelding als de pakketten ontbreken; upload ze dan
+  eerst in de controller en draai de provisioning opnieuw.
 
 ---
 

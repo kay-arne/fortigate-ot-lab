@@ -7,6 +7,7 @@ opgezocht kunnen worden in plaats van hard-coded.
 """
 from __future__ import annotations
 
+import base64
 import ipaddress
 import re
 import socket
@@ -16,7 +17,7 @@ import paramiko
 import requests
 import urllib3
 
-from .config import get_state, inventory, netmask, segment_map, update_state, vm_name
+from .config import SIGNATURES, get_state, inventory, netmask, segment_map, update_state, vm_name
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -373,15 +374,10 @@ def connectivity_test(log, topo):
 # Naam in 'diagnose autoupdate versions' -> label. De namen verschillen per
 # FortiOS-build; wat niet gevonden wordt, heet 'onbekend' en blokkeert niets.
 OT_PACKAGES = [
-    ("IoT Detect Definitions", re.compile(r"^iot[\s_-]*detect", re.I)),
-    ("MAC Address Database", re.compile(r"^mac[\s_-]*address", re.I)),
-    ("OT Detect Definitions", re.compile(r"^ot[\s_-]*detect", re.I)),
-    ("OT Patch Definitions", re.compile(r"^ot[\s_-]*patch", re.I)),
-    ("OT Threat Definitions", re.compile(r"^ot[\s_-]*threat", re.I)),
+    ("OT Detect Definitions", re.compile(r"^ot[\s_-]*detect", re.I)),      # device identification (M580)
+    ("OT Patch Definitions", re.compile(r"^ot[\s_-]*patch", re.I)),        # virtual patching
+    ("OT Threat Definitions", re.compile(r"^ot[\s_-]*threat", re.I)),      # OT-signatures / classificatie
 ]
-OT_UPDATE_WAIT = 150  # seconden wachten per update-poging
-
-
 def autoupdate_versions(topo) -> dict[str, dict]:
     """Pakketten uit 'diagnose autoupdate versions': naam -> versie en laatste resultaat."""
     out = ssh_cli(topo, ["diagnose autoupdate versions"], timeout=60).replace("\r", "")
@@ -438,37 +434,62 @@ def ot_signature_status(topo) -> dict:
     return status
 
 
-def update_ot_signatures(log, topo, attempts=1, wait=OT_UPDATE_WAIT) -> dict:
-    """Start een FortiGuard-update op de FortiGate en wacht tot de OT-pakketten
-    geladen zijn. Meer pogingen helpt als de eerste download uitblijft."""
+# De online FortiGuard-update is in een lab te traag/onbetrouwbaar. In plaats
+# daarvan uploaden we de .pkg-bestanden offline (zoals System > FortiGuard in de
+# GUI). db_name per pakkettype (herkend aan de .<TYPE>.pkg-tag of het prefix).
+SIG_DB_NAME = {
+    "isdb": "internet_service_db",   # Internet Service / OT threat definitions
+    "otdb": "industrial_db",         # OT device identification
+    "otdp": "industrial_db",         # OT vulnerability correlation & virtual patching
+    "iotd": "iot_detection",         # IoT detection
+    "ips": "ips", "appctrl": "appctrl", "avdb": "antivirus",
+}
+
+
+def _pkg_db_name(fname: str) -> str | None:
+    m = re.search(r"\.([A-Za-z]+)\.pkg$", fname) or re.match(r"([A-Za-z]+)[_.]", fname)
+    return SIG_DB_NAME.get(m.group(1).lower()) if m else None
+
+
+def signature_files() -> list:
+    return sorted(SIGNATURES.glob("*.pkg"))
+
+
+def upload_signatures(log, topo) -> dict:
+    """Upload de lokaal aangeleverde FortiGuard-.pkg's naar de FortiGate (offline,
+    via de monitor-API). Vervangt de online update, die in een lab te traag is."""
+    files = signature_files()
+    if not files:
+        log(f"geen .pkg-bestanden in {SIGNATURES}. Download ze van support.fortinet.com "
+            "(Downloads > Service Updates) en upload ze in de controller (Lab-tab > OT-signatures).")
+        return ot_signature_status(topo)
+    api = Api(topo)
+    for f in files:
+        db = _pkg_db_name(f.name)
+        if not db:
+            log(f"⚠ {f.name}: pakkettype niet herkend, overgeslagen")
+            continue
+        body = {"db_name": db, "confirm_not_signed": True, "confirm_not_ga_certified": True,
+                "file_content": base64.b64encode(f.read_bytes()).decode()}
+        try:
+            r = api.s.post(f"{api.base}/api/v2/monitor/license/database/upgrade", json=body, timeout=180)
+            detail = ""
+            try:
+                detail = r.json().get("status") or r.json().get("error") or ""
+            except ValueError:
+                detail = r.text[:150]
+            log(f"  {f.name} -> {db}: HTTP {r.status_code} {detail}")
+        except requests.RequestException as e:
+            log(f"  {f.name} -> {db}: ✖ {e}")
+    time.sleep(10)  # de FortiGate verwerkt de pakketten
     st = ot_signature_status(topo)
-    log(f"OT-signatures voor de update: {st['state']} ({st['detail']})")
-    for attempt in range(1, attempts + 1):
-        log(f"FortiGuard-update starten ('execute update-now'), poging {attempt}/{attempts}")
-        ssh_cli(topo, ["execute update-now"], timeout=60)
-        deadline = time.time() + wait
-        while time.time() < deadline:
-            time.sleep(15)
-            st = ot_signature_status(topo)
-            if st["state"] != "missing":
-                log(f"✔ OT-signatures geladen: {st['detail']}")
-                return st
-        log(f"  na {wait} s nog steeds: {st['detail']}")
-    for p in st["packages"]:
-        if not p["loaded"]:
-            log(f"  {p['name']}: laatste poging '{p['attempt'] or '-'}', resultaat '{p['result'] or '-'}'")
-    log("✖ OT-signatures niet geladen. Controleer of de FortiGate FortiGuard bereikt (DNS, default route, "
-        "uitgaand verkeer) en of de OT-licentie actief is.")
-    try:
-        connectivity_test(log, topo)
-    except Exception as e:  # noqa: BLE001 - alleen diagnose
-        log(f"  connectiviteitstest mislukt: {e}")
+    log(f"OT-signatures na upload: {st['state']} ({st['detail']})")
     return st
 
 
 def ensure_ot_signatures(log, topo):
-    """Provisioning-stap: zonder OT-signatures faalt het lab, dus dit stopt de
-    provisioning als ze ook na een update ontbreken."""
+    """Provisioning-stap: zonder OT-signatures faalt het lab. Zijn ze er niet, dan
+    uploaden we de lokaal aangeleverde .pkg's; lukt dat niet, dan stopt provisioning."""
     st = ot_signature_status(topo)
     if st["state"] == "ok":
         log(f"OT-signatures geladen: {st['detail']}")
@@ -476,11 +497,12 @@ def ensure_ot_signatures(log, topo):
     if st["state"] == "unknown":
         log(f"⚠ OT-signatures niet te controleren: {st['detail']}")
         return
-    st = update_ot_signatures(log, topo, attempts=3)
+    log("OT-signatures ontbreken; lokaal aangeleverde .pkg's uploaden naar de FortiGate")
+    st = upload_signatures(log, topo)
     if st["state"] == "missing":
-        raise RuntimeError(f"OT-signatures ontbreken ({st['detail']}); het lab werkt hier niet zonder. "
-                           "Los de FortiGuard-verbinding op en draai de provisioning opnieuw, of start "
-                           "'OT-signatures bijwerken' in de controller.")
+        raise RuntimeError("OT-signatures ontbreken en konden niet geladen worden. Download de pakketten van "
+                           "support.fortinet.com (Downloads > Service Updates) en upload ze in de controller "
+                           "(Lab-tab > OT-signatures); draai daarna de provisioning opnieuw.")
 
 
 def ensure_api_key(log, topo):

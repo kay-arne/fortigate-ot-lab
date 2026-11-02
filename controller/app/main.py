@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import auth, deployer, fortigate, jobs, scenarios, updates
-from .config import (DATA, HOST_FILE, UPLOADS, contractor_credentials, contractor_totp_secret, get_state, totp, inventory, load_host, load_topology,
+from .config import (DATA, HOST_FILE, SIGNATURES, UPLOADS, contractor_credentials, contractor_totp_secret, get_state, totp, inventory, load_host, load_topology,
                      template_vmid, update_state)
 from .hostctl import host
 
@@ -120,6 +120,7 @@ def public_state() -> dict:
         "dns_suggestion": _resolvers(),
         "deployed": s.get("deployed", False),
         "provisioned": s.get("fgt_provisioned", False),
+        "signatures": sorted(p.name for p in SIGNATURES.glob("*.pkg")),
         "checks": checks,
     }
 
@@ -374,9 +375,22 @@ def signatures_check():
 
 @app.post("/api/signatures/update")
 def signatures_update():
-    """Update-ronde: FortiGuard-update starten en wachten tot de OT-pakketten geladen zijn."""
-    return _start("OT-signatures bijwerken",
-                  lambda log: fortigate.update_ot_signatures(log, load_topology(), attempts=2))
+    """Push de lokaal aangeleverde FortiGuard-.pkg's naar de FortiGate (offline)."""
+    return _start("OT-signatures uploaden",
+                  lambda log: fortigate.upload_signatures(log, load_topology()))
+
+
+@app.post("/api/upload/signature")
+async def upload_signature(request: Request, filename: str):
+    """FortiGuard-signature-pakket (.pkg) opslaan in de controller (niet in git)."""
+    name = Path(filename).name
+    if not name.lower().endswith(".pkg"):
+        raise HTTPException(400, "verwacht een .pkg-bestand")
+    dest = SIGNATURES / name
+    with open(dest, "wb") as f:
+        async for chunk in request.stream():
+            f.write(chunk)
+    return {"signatures": [p.name for p in fortigate.signature_files()]}
 
 
 class Destroy(BaseModel):

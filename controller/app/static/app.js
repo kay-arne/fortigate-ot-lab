@@ -149,6 +149,7 @@ function fillSettings(s) {
   renderChecks(s.checks);
   $("#cur-image").textContent = s.fgt_image ? `${s.fgt_image} (${fmtSize(s.fgt_image_size || 0)})` : "geen";
   $("#cur-license").textContent = s.license_file || "geen";
+  $("#cur-signatures").textContent = (s.signatures && s.signatures.length) ? s.signatures.join(", ") : "geen";
   $("#i-wanmode").value = s.wan.mode || "static";
   $("#i-wanip").value = s.wan.ip || "";
   $("#i-wangw").value = s.wan.gateway || "";
@@ -249,6 +250,21 @@ function upload(inputSel, url, progressSel) {
 }
 $("#btn-upload-image").onclick = () => upload("#f-image", "/api/upload/image", "#p-image");
 $("#btn-upload-license").onclick = () => upload("#f-license", "/api/upload/license");
+
+async function uploadSignatures() {
+  const files = [...$("#f-signatures").files];
+  if (!files.length) return alert("Kies eerst één of meer .pkg-bestanden");
+  let last;
+  for (const file of files) {
+    const r = await fetch(`/api/upload/signature?filename=${encodeURIComponent(file.name)}`,
+      { method: "POST", body: file });
+    if (r.status === 401) return (location.href = "/login");
+    if (!r.ok) return alert(await r.text());
+    last = await r.json();
+  }
+  if (last) $("#cur-signatures").textContent = last.signatures.length ? last.signatures.join(", ") : "geen";
+}
+$("#btn-upload-signatures").onclick = uploadSignatures;
 
 // --- Proxmox-verbinding ------------------------------------------------------
 function secretRow(id, value) {

@@ -19,6 +19,7 @@ import yaml
 ROOT = Path(os.environ.get("OTLAB_ROOT", Path(__file__).resolve().parents[2]))
 DATA = ROOT / "data"
 UPLOADS = DATA / "uploads"
+SIGNATURES = DATA / "signatures"  # lokaal aangeleverde FortiGuard-.pkg's (niet in git)
 TOPOLOGY_FILE = ROOT / "lab" / "topology.yaml"
 SCENARIO_FILE = ROOT / "lab" / "scenarios.yaml"
 STATE_FILE = DATA / "state.json"
@@ -26,6 +27,7 @@ HOST_FILE = DATA / "host.json"
 
 DATA.mkdir(parents=True, exist_ok=True)
 UPLOADS.mkdir(parents=True, exist_ok=True)
+SIGNATURES.mkdir(parents=True, exist_ok=True)
 
 _lock = threading.Lock()
 
