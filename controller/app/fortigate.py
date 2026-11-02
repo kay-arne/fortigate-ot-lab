@@ -437,11 +437,14 @@ def ot_signature_status(topo) -> dict:
 # De online FortiGuard-update is in een lab te traag/onbetrouwbaar. In plaats
 # daarvan uploaden we de .pkg-bestanden offline (zoals System > FortiGuard in de
 # GUI). db_name per pakkettype (herkend aan de .<TYPE>.pkg-tag of het prefix).
+# De OT Security Service-pakketten (OT detect/patch/threat en IoT detect) gaan
+# allemaal als 'industrial_db'; de FortiGate leest het precieze type uit het
+# pakket-header. Alleen industrial_db werkte in de praktijk (HTTP 200).
 SIG_DB_NAME = {
-    "isdb": "internet_service_db",   # Internet Service / OT threat definitions
-    "otdb": "industrial_db",         # OT device identification
-    "otdp": "industrial_db",         # OT vulnerability correlation & virtual patching
-    "iotd": "iot_detection",         # IoT detection
+    "otdb": "industrial_db",   # OT device identification
+    "otdp": "industrial_db",   # OT vulnerability correlation & virtual patching
+    "isdb": "industrial_db",   # OT threat definitions
+    "iotd": "industrial_db",   # IoT detection
     "ips": "ips", "appctrl": "appctrl", "avdb": "antivirus",
 }
 
@@ -473,11 +476,14 @@ def upload_signatures(log, topo) -> dict:
                 "file_content": base64.b64encode(f.read_bytes()).decode()}
         try:
             r = api.s.post(f"{api.base}/api/v2/monitor/license/database/upgrade", json=body, timeout=180)
-            detail = ""
-            try:
-                detail = r.json().get("status") or r.json().get("error") or ""
-            except ValueError:
-                detail = r.text[:150]
+            if r.ok:
+                detail = "success"
+            else:
+                try:
+                    j = r.json()
+                    detail = str(j.get("error") or j.get("message") or j.get("cli_error") or j)[:250]
+                except ValueError:
+                    detail = r.text[:250]
             log(f"  {f.name} -> {db}: HTTP {r.status_code} {detail}")
         except requests.RequestException as e:
             log(f"  {f.name} -> {db}: ✖ {e}")
