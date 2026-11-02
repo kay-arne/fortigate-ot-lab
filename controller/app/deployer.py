@@ -304,6 +304,10 @@ def build_template(log, topo):
         log("apt packages installeren")
         h.pct_exec(vmid, f"export DEBIAN_FRONTEND=noninteractive; apt-get update -q && apt-get install -yq {APT_PACKAGES}",
                    timeout=1200, check=True)
+        # Tijdzone Europe/Amsterdam, zodat container-logs met de FortiGate en controller
+        # synchroon lopen (de default UTC/Pacific liep uit de pas).
+        h.pct_exec(vmid, "ln -sf /usr/share/zoneinfo/Europe/Amsterdam /etc/localtime && "
+                         "echo Europe/Amsterdam > /etc/timezone", check=False)
         log("python-omgeving met OT-protocol libraries")
         h.pct_exec(vmid, f"python3 -m venv /opt/otsim/venv && /opt/otsim/venv/bin/pip install -q {PIP_PACKAGES}",
                    timeout=1200, check=True)
@@ -586,6 +590,8 @@ def update_simulators(log):
     for node in inventory(topo):
         if host().status(node["vmid"]) == "running":
             log(f"otsim bijwerken op {node['hostname']}")
+            host().pct_exec(node["vmid"], "ln -sf /usr/share/zoneinfo/Europe/Amsterdam /etc/localtime && "
+                                          "echo Europe/Amsterdam > /etc/timezone", check=False)
             push_otsim(log, node["vmid"])
             sync_packages(log, node)
             write_node_config(node)

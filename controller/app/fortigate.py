@@ -29,6 +29,9 @@ API_USER = "otlab-controller"
 BOOTSTRAP_PASSWORD = "Deployment_Pass2026"
 # Lab: zo lang mogelijk ingelogd blijven in de GUI (FortiOS-maximum, minuten).
 ADMIN_TIMEOUT = 480
+# Tijdzone van de FortiGate (default Pacific is onhandig: logs liepen 8 uur uit de
+# pas met de controller). FortiOS 7.4+ accepteert de IANA-naam.
+TIMEZONE = "Europe/Amsterdam"
 
 
 def port_alias(seg) -> str:
@@ -54,6 +57,7 @@ def bootstrap_config(topo, state) -> str:
     lines = [
         "config system global",
         f'    set hostname "{vm_name(topo, fgt["name"])}"',
+        f'    set timezone "{TIMEZONE}"',
         f"    set admintimeout {ADMIN_TIMEOUT}",
         f"    set admin-sport {fgt.get('admin_https_port', 443)}",
         "end",
@@ -577,6 +581,7 @@ def ensure_admin_password(log, topo):
 # negeert onbekende velden, dus na het zetten lezen we terug wat is blijven staan.
 GUI_GLOBAL = {
     "admintimeout": ADMIN_TIMEOUT,
+    "timezone": TIMEZONE,
     "gui-forticare-registration-setup-warning": "disable",
     "gui-auto-upgrade-setup-warning": "disable",
     "gui-firmware-upgrade-setup-warning": "disable",
