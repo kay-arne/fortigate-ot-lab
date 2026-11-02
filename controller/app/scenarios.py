@@ -271,8 +271,14 @@ def check_plc_dos_vpatch(log, topo) -> dict:
         time.sleep(12)  # de IPS-engine heeft enkele seconden nodig voor de nieuwe sensor actief is
         atk2 = run_command(VPATCH_ATTACKER, f"umas-dos {VPATCH_PLC}")
         log(f"    {atk2.get('detail')}")
-        phase2 = _poll_plc(VPATCH_ATTACKER, VPATCH_PLC, want_up=True, log=log)
-        log(f"    PLC {'bleef bereikbaar (aanval geblokkeerd)' if phase2 else 'viel alsnog stil (onverwacht)'}")
+        # Direct na de aanval kijken: ligt de PLC stil, dan kwam het exploit-frame
+        # door (niet geblokkeerd). NIET op herstel wachten -- dan meet je het
+        # vanzelf herstellen na het listen-only-venster i.p.v. de block.
+        time.sleep(3)
+        up1 = _plc_reachable(VPATCH_ATTACKER, VPATCH_PLC)
+        up2 = _plc_reachable(VPATCH_ATTACKER, VPATCH_PLC)
+        phase2 = up1 and up2
+        log(f"    PLC {'bleef meteen bereikbaar (aanval geblokkeerd)' if phase2 else 'viel stil (aanval kwam door, niet geblokkeerd)'}")
     finally:
         fortigate.policy_ips_sensor(topo, VPATCH_POLICY, before or fortigate.OT_IPS_SENSOR)
         log(f"  IPS-sensor op '{VPATCH_POLICY}' hersteld naar {before or fortigate.OT_IPS_SENSOR}")
