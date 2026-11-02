@@ -169,6 +169,23 @@ met een echte FortiGate-VM gedraaid**. Controleer bij de eerste uitrol vooral:
   toont de status (tegel **OT-signatures**) en de knop **OT-signatures uploaden** pusht ze opnieuw; de
   Testcenter-test `ot-signatures` controleert of ze geladen zijn (versie boven `0.00000`). De `db_name` per
   pakket zit in `SIG_DB_NAME` in `controller/app/fortigate.py`.
+- **Device-identificatie (vendor-MAC's + device-ID)**: de FortiGate deelt OT-assets in op o.a. het
+  MAC-adres (MAC Address Database → vendor) en het protocol. Daarom krijgt elk gesimuleerd device de
+  MAC-OUI van de fabrikant die het nabootst (`VENDOR_OUI` in `controller/app/deployer.py`):
+  Schneider/Telemecanique (`00:80:F4`) voor de Modbus-PLC's, field-I/O, HMI en OPC UA-gateway, Siemens
+  (`00:1B:1B`) voor de S7-PLC; IT-hosts en probes blijven neutraal (`02:4F:54`). Een redeploy werkt de
+  MAC op bestaande containers bij. De Modbus-PLC's beantwoorden daarnaast **Modbus Read Device
+  Identification (FC43)** als een Schneider **Modicon M580** (firmware `SV2.70`) — `_plc_identity()` in
+  `otsim/modbus.py` — en de HMI vraagt die identiteit periodiek op, zodat de FortiGate vendor én model
+  over de conduit fingerprint. Zo kan de **OT vulnerability correlation** de bekende CVE's aan het device
+  koppelen; dat is de voorwaarde waaronder virtual patching ingrijpt.
+- **Virtual patching (demo `plc-dos-vpatch`)**: de aanval is een echte Schneider **UMAS-DoS**
+  (CVE-2018-7846) over Modbus (function code `0x5A`). De probe zet eerst een UMAS-sessie op (INIT_COMM,
+  TAKE_PLC_RESERVATION → session key) zodat de FortiGate het als UMAS herkent, en stuurt dan de DoS
+  (RELEASE_PLC_RESERVATION). De PLC 'spreekt' UMAS (`_UmasRequest` in `otsim/modbus.py`) en valt alleen
+  op de DoS stil. Enforcement loopt via de `OT-IPS`-sensor (block medium+); de demo wisselt die even naar
+  `OT-IPS-novp` (detecteert maar blokkeert niet) om de 'ongepatchte' situatie te tonen, en terug. De
+  FortiGuard `Schneider.Electric.Modicon.M580.UMAS.*`-signatures horen het exploit-frame dan te droppen.
 - `config ips global / set exclude-signatures none` neemt OT-signatures op in IPS; controleer of je
   FortiOS-build dit zo verwacht.
 - Het LXC-template haalt eenmalig packages op via `vmbr0` (DHCP). Geen DHCP? Zet `template_net` in

@@ -198,9 +198,13 @@ hebben we, en wie praat ermee?" Er is geen assetlijst.*
   L1, de HMI, OPC UA-gateway en EWS in L2, de historian en het MES in L3.
 - De FortiGate herkent de OT-protocollen aan de inhoud van het verkeer. Het
   OT-monitor-profiel blokkeert niets, maar logt alles.
-- Elk device heeft een vast MAC-adres dat zijn IP-adres bevat (`02:4F:54:10:00:0A`
-  is 10.10.0.10). Na een herinstallatie blijft het hetzelfde asset; in een echte
-  fabriek is dat vanzelfsprekend, in een lab moet je het regelen.
+- Elk device heeft een vast MAC-adres met de laatste drie octetten van zijn IP, zodat
+  het na een herinstallatie hetzelfde asset blijft. De eerste drie octetten (de OUI)
+  volgen de **fabrikant** die het device simuleert: Schneider/Telemecanique
+  (`00:80:F4`) voor de Modbus-PLC's, field-I/O, HMI en OPC UA-gateway, Siemens
+  (`00:1B:1B`) voor de S7-PLC; servers en probes blijven neutraal (`02:4F:54`). Zo
+  deelt de FortiGate (via de *MAC Address Database*) elk asset meteen bij de juiste
+  vendor in — de basis voor de kwetsbaarheidscorrelatie in hoofdstuk 7.
 
 **Les**
 - Zichtbaarheid komt eerst: je kunt niet beschermen wat je niet ziet.
@@ -425,28 +429,43 @@ en die mag over HTTP bij het MES.*
 - Koppel het terug aan hoofdstuk 4: welk verkeer mag überhaupt bij een kwetsbaar
   systeem komen? Virtual patching inspecteert juist dat toegestane verkeer.
 
-**Actie — nu voor de PLC zelf**
-- Testcenter: **Virtual patching: Force-Listen-Only DoS op de PLC** (`plc-dos-vpatch`).
-  Deze demo doet dezelfde aanval twee keer vanaf L3 (`probe-ops`) op de tank-PLC:
-  - *eerst met virtual patching uit*: een Modbus **Force Listen Only Mode** (FC08,
-    sub-functie 0x0004) bereikt de PLC. Dat is een echte, in de Modbus-spec
-    beschreven DoS: de PLC stopt met reageren op het netwerk. Kijk in de SCADA HMI —
-    de tank-PLC valt ~20 s weg. Het proces loopt intern door, maar je bent blind;
-  - *dan met de block aan*: precies dezelfde aanval wordt nu door de
-    FortiGuard-signature **Modbus.TCP.Force.Listen.Only** (ID 11521) geblokkeerd
-    voordat hij de PLC bereikt. De PLC blijft bereikbaar.
-  De demo wisselt de IPS-sensor van de L3→L1-policy even naar een variant zonder
-  deze block en daarna terug; na afloop staat alles zoals het was.
-- Bekijk in *Log & Report > Security Events* de blokkade: signature
-  `Modbus.TCP.Force.Listen.Only`, actie *dropped*, afkomstig van het L3-bron-IP.
-- Open *Security Profiles > IPS Signatures* en zoek op `force.listen`: dit is geen
-  zelfgeschreven regel maar een kant-en-klare FortiGuard OT-signature. Zijn
-  default-actie is *Pass* (detecteren); het lab forceert hem op *Block* in de
-  `OT-IPS`-sensor voor de conduits de fabriek in. Fortinet toont dezelfde signature
-  ook onder *Virtual Patching Signatures*, naast duizenden CVE-signatures voor
-  CODESYS, Siemens en Schneider.
+**Eerst herkennen, dan beschermen.** Virtual patching koppelt een signature aan de
+*kwetsbaarheden van een herkend product*. De FortiGate moet de PLC dus eerst als een
+specifiek apparaat zien. In dit lab stelt de tank-PLC zich voor als een **Schneider
+Modicon M580**, op twee manieren tegelijk:
+- het **MAC-adres** krijgt de Schneider/Telemecanique-OUI `00:80:F4` (de *MAC Address
+  Database* vertaalt dat naar de vendor);
+- de PLC beantwoordt **Modbus Read Device Identification** (function code 43) met
+  vendor *Schneider Electric*, product *BMEP582040 / Modicon M580* en firmware `SV2.70`;
+  de HMI vraagt die identiteit periodiek op, zodat het fingerprint de FortiGate passeert.
 
-![Virtual Patching Signatures: de Modbus-signatures, waaronder Force.Listen.Only (Block)](img/fgt-vpatch-sigs.jpg)
+Controleer in *Security Fabric > Asset Identity Center* dat de PLC als Schneider
+Modicon verschijnt, en open de **IoT/OT-kwetsbaarheden** van dat device: daar komen de
+bekende CVE's met hun **Virtual Patching Signatures** te staan.
+
+![Virtual Patching Signatures: de Modicon M580 UMAS-signatures met hun CVE's (Block)](img/fgt-vpatch-sigs.jpg)
+
+**Actie — de aanval op de PLC**
+- Testcenter: **Virtual patching: Schneider M580 UMAS-DoS (CVE-2018-7846)**
+  (`plc-dos-vpatch`). Deze demo doet dezelfde aanval twee keer vanaf L3 (`probe-ops`)
+  op de tank-PLC. De aanval is een **UMAS-DoS**: UMAS is Schneiders eigen protocol dat
+  over Modbus loopt (function code `0x5A`). Ghost zet eerst een UMAS-sessie op
+  (`INIT_COMM`, `TAKE_PLC_RESERVATION`) en stuurt dan het DoS-frame
+  (`RELEASE_PLC_RESERVATION`, CVE-2018-7846).
+  - *eerst met virtual patching uit*: het exploit-frame bereikt de PLC. Kijk in de
+    SCADA HMI — de tank-PLC valt ~20 s weg. Het proces loopt intern door, maar je bent blind;
+  - *dan met virtual patching aan*: de FortiGuard-signature
+    `Schneider.Electric.Modicon.M580.UMAS...DoS` dropt het frame vóór de PLC. De PLC
+    blijft bereikbaar.
+  De demo wisselt de IPS-sensor van de L3→L1-policy even naar `OT-IPS-novp` (die wel
+  detecteert maar niets blokkeert) en daarna terug naar `OT-IPS`; na afloop staat alles
+  zoals het was.
+- Bekijk in *Log & Report > Security Events* de blokkade: een
+  `Schneider.Electric.Modicon.M580.UMAS`-signature, actie *dropped*, van het L3-bron-IP.
+- Open *Security Profiles > IPS Signatures* en zoek op `Modicon.M580.UMAS`: kant-en-klare
+  FortiGuard-CVE-signatures (o.a. CVE-2018-7846), geen zelfgeschreven regels. Ze zitten
+  ook onder *Virtual Patching Signatures*, naast duizenden CVE-signatures voor CODESYS,
+  Siemens en Schneider.
 
 **Onthulling**
 De firewall-policy laat de verbinding toe, maar de payload bereikt het MES niet:
@@ -463,18 +482,18 @@ Security Service.
 - IEC 62443: FR3 *system integrity* en het patchmanagement uit 62443-2-3.
 
 > Shellshock is het IT/web-voorbeeld (één HTTP-header), `plc-dos-vpatch` het
-> OT-voorbeeld op het Modbus-protocol zelf. Beide signatures komen kant-en-klaar uit
-> FortiGuard en vragen de **OT Security Service** (zie "Voordat je begint").
+> OT-voorbeeld op een echt product-CVE (Modicon M580, UMAS). Beide signatures komen
+> kant-en-klaar uit FortiGuard en vragen de **OT Security Service** (zie "Voordat je begint").
 >
-> Twee manieren om zo'n signature af te dwingen: het **Virtual Patching-profiel**
-> (het MES-voorbeeld hierboven) koppelt automatisch aan *gedetecteerde*
-> product-kwetsbaarheden — handig op echte PLC's, maar onze gesimuleerde PLC is niet
-> aan een CVE gekoppeld, dus daar grijpt het profiel niet. Daarom zetten we voor de
-> PLC-demo de signature expliciet op *block* in de **OT-IPS-sensor**: zelfde
-> FortiGuard-signature, maar gegarandeerd actief op het verkeerspatroon. De
-> virtual-patch-database bevat daarnaast duizenden CVE-signatures voor concrete
-> firmware (CODESYS, Siemens, Schneider); die gaan pas af op het exacte
-> exploit-verkeer van dat product.
+> Virtual patching leunt op device-herkenning: op een echte PLC koppelt de FortiGate de
+> CVE's automatisch zodra hij het product kent (het **Virtual Patching-profiel** doet dat,
+> zoals bij het MES hierboven). Onze PLC is een simulator, dus laten we hem er zo echt
+> mogelijk uitzien — vendor-MAC `00:80:F4` plus een Modbus device-ID als Modicon M580 —
+> én dwingen we de M580-signature bovendien expliciet af in de **OT-IPS-sensor** (block
+> medium+), zodat de enforcement niet alleen van de automatische correlatie afhangt. De
+> virtual-patch-database bevat duizenden van dit soort CVE-signatures voor concrete
+> firmware (CODESYS, Siemens, Schneider); die gaan pas af op het exacte exploit-verkeer
+> van dat product — vandaar de echte UMAS-handshake in de aanval.
 
 ## Afsluiting: het rapport voor Mark
 
