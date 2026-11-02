@@ -24,14 +24,20 @@ $$("[data-goto]").forEach((b) => b.addEventListener("click", () => goTo(b.datase
 
 // --- job log ---------------------------------------------------------------
 let logTimer = null;
+let activeJobId = null;
 function followJob(job, onDone) {
+  activeJobId = job.id;
   document.body.classList.add("logopen");
+  $("#job-pill").hidden = true;
+  $("#log-stop").hidden = false;
   $("#log-title").textContent = job.title;
   $("#log-body").textContent = "";
   clearInterval(logTimer);
   let offset = 0;
   logTimer = setInterval(async () => {
-    const j = await api(`/api/jobs/${job.id}?offset=${offset}`);
+    let j;
+    try { j = await api(`/api/jobs/${job.id}?offset=${offset}`); }
+    catch (e) { return; }  // bv. tijdens herstart controller; volgende tick opnieuw
     offset = j.offset;
     if (j.lines.length) {
       $("#log-body").textContent += j.lines.join("\n") + "\n";
@@ -39,12 +45,21 @@ function followJob(job, onDone) {
     }
     if (j.status !== "running") {
       clearInterval(logTimer);
+      activeJobId = null;
+      $("#log-stop").hidden = true;
+      $("#log-title").textContent = `${job.title} — ${j.status}`;
       refresh();
       onDone && onDone();
     }
   }, 1500);
 }
-$("#log-close").onclick = () => document.body.classList.remove("logopen");
+// Sluiten verbergt alleen het venster; de taak loopt door en is via de pill te heropenen.
+$("#log-close").onclick = () => { document.body.classList.remove("logopen"); clearInterval(logTimer); refresh(); };
+$("#log-stop").onclick = async () => {
+  if (!activeJobId || !confirm("De lopende taak stoppen?")) return;
+  try { await post(`/api/jobs/${activeJobId}/stop`); } catch (e) { alert(e.message); }
+};
+$("#job-pill").onclick = () => { if ($("#job-pill")._job) followJob($("#job-pill")._job); };
 
 async function action(path, data, onDone) {
   try { followJob(await post(path, data), onDone); } catch (e) { alert(e.message); }
@@ -508,6 +523,16 @@ async function refresh() {
     hs.textContent = st.host_error ? "Proxmox: geen verbinding" : "Proxmox: verbonden";
     hs.className = "pill " + (st.host_error ? "bad" : "ok");
     hs.title = st.host_error || "";
+    // Lopende taak terwijl het logvenster dicht is -> pill om te heropenen.
+    const run = (st.jobs || []).find((j) => j.status === "running");
+    const pill = $("#job-pill");
+    if (run && !document.body.classList.contains("logopen")) {
+      pill._job = { id: run.id, title: run.title };
+      pill.textContent = `⟳ ${run.title} loopt — toon log`;
+      pill.hidden = false;
+    } else {
+      pill.hidden = true;
+    }
   } catch (e) { console.error(e); }
 }
 loadSettings();

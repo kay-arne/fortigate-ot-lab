@@ -438,6 +438,13 @@ def job(job_id: str, offset: int = 0):
             "offset": len(j["lines"])}
 
 
+@app.post("/api/jobs/{job_id}/stop")
+def stop_job(job_id: str):
+    if not jobs.stop(job_id):
+        raise HTTPException(404, "geen lopende taak met dit id")
+    return {"ok": True}
+
+
 # --- testcenter -------------------------------------------------------------
 @app.get("/api/scenarios")
 def list_scenarios():
