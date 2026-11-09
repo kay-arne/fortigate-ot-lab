@@ -15,7 +15,7 @@
   --font: "Geist", "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0f1012; --panel: #18191c; --line: rgba(255,255,255,.10); --fg: #f4f4f5; --muted: #a1a4ab;
     --accent: #da291c; --ok: #2ea66a; --warn: #d9a400; --bad: #f05545; --blue: #5b9bd8;
     --inset: #232428; --hover: rgba(255,255,255,.06); --btn-bd: rgba(255,255,255,.18);
@@ -27,11 +27,32 @@
     --term-bg: #08090a; --term-fg: #dde4ea; --ev: #b9c6d1; --help: #c3c7ce;
   }
 }
+:root[data-theme="dark"] {
+  --bg: #0f1012; --panel: #18191c; --line: rgba(255,255,255,.10); --fg: #f4f4f5; --muted: #a1a4ab;
+  --accent: #da291c; --ok: #2ea66a; --warn: #d9a400; --bad: #f05545; --blue: #5b9bd8;
+  --inset: #232428; --hover: rgba(255,255,255,.06); --btn-bd: rgba(255,255,255,.18);
+  --ok-bg: #153325; --ok-fg: #7fe0ab;
+  --warn-bg: #3a2a12; --warn-fg: #f3c46b;
+  --bad-bg: #3d1c1c; --bad-fg: #f29a9a;
+  --info-bg: #1b2f44; --info-fg: #9cc8ef; --info-bd: #2c5577;
+  --link: #9cc8ef; --strip: #08090a;
+  --term-bg: #08090a; --term-fg: #dde4ea; --ev: #b9c6d1; --help: #c3c7ce;
+}
 * { box-sizing: border-box; }
 body { margin: 0; font: 14px/1.5 var(--font); background: var(--bg); color: var(--fg); -webkit-font-smoothing: antialiased; }
 h1, h2, h3 { letter-spacing: -0.015em; }
 h1 { font-size: 15px; font-weight: 700; margin: 0; white-space: nowrap; }
 h2 { font-size: 15px; margin: 0 0 10px; }
+
+/* thema-schakelaar (maan/zon) */
+.theme-toggle { width: 34px; height: 34px; padding: 0; border-radius: 999px; display: grid; place-items: center; color: var(--muted); }
+.theme-toggle:hover { color: var(--fg); }
+.theme-toggle svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.theme-toggle .sun { display: none; }
+.theme-toggle[data-mode="dark"] .sun { display: block; }
+.theme-toggle[data-mode="dark"] .moon { display: none; }
+.login-card .theme-toggle { position: absolute; top: 12px; right: 12px; }
+.login-card { position: relative; }
 
 /* page chrome */
 .strip { background: var(--strip); color: rgba(255,255,255,.6); font-size: 11px; letter-spacing: .03em; }
