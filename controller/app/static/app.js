@@ -370,7 +370,7 @@ async function loadAccess() {
     <div class="acc"><h3>1. FortiGate-GUI <span class="tag">security-team</span></h3>
       <p>Logs, policies en assets: hier zie je wát er gebeurde.</p>
       <table class="kv"><tr><th>URL</th><td>${a.fgt_url ? `<a href="${esc(a.fgt_url)}" target="_blank" rel="noopener">${esc(a.fgt_url)}</a>` : "-"}</td></tr>
-        <tr><th>Login</th><td><span class="mono">${esc(a.fgt_user)}</span> / ${secretRow("acc-fgtpw", a.fgt_password)}</td></tr></table></div>
+        <tr><th>Login</th><td><div class="row"><span class="mono">${esc(a.fgt_user)}</span><span class="muted">/</span>${secretRow("acc-fgtpw", a.fgt_password)}</div></td></tr></table></div>
     <div class="acc"><h3>2. Contractor via jump host <span class="tag">door de FortiGate</span></h3>
       <p>Het pad van Remco: SSH via de VIP naar de jump host in de DMZ, en van daar alleen naar de EWS.</p>
       <table class="kv"><tr><th>Jump host</th><td><code>ssh -p ${a.jump_port} ${esc(a.user)}@${wan}</code></td></tr>
