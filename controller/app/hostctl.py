@@ -78,6 +78,12 @@ class Host:
             client = self._connect()
         sftp = client.open_sftp()
         try:
+            # Een bestand van een andere gebruiker (bijv. uit een eerdere installatie)
+            # kan niet overschreven worden, wel verwijderd: de werkmap is van ons.
+            try:
+                sftp.remove(remote_path)
+            except IOError:
+                pass
             sftp.put(str(local_path), remote_path, callback=callback)
         finally:
             sftp.close()

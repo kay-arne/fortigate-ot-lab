@@ -31,6 +31,9 @@ c_info() { printf '\033[1;36m[otlab]\033[0m %s\n' "$*"; }
 c_ok()   { printf '\033[1;32m[otlab]\033[0m %s\n' "$*"; }
 c_err()  { printf '\033[1;31m[otlab]\033[0m %s\n' "$*" >&2; }
 die()    { c_err "$*"; exit 1; }
+# Een bestaande hostgebruiker mag alleen hergebruikt worden als hij van dit lab is; anders
+# delen twee labs op een Proxmox-host dezelfde gebruiker en botsen hun bestanden en rechten.
+user_foreign() { local c; id "$1" >/dev/null 2>&1 || return 1; c="$(getent passwd "$1" | cut -d: -f5)"; [[ $c != "FortiGate OT Lab controller" ]]; }
 # whiptail draait in $(...)-subshells; een Cancel moet het hoofdscript stoppen
 trap 'clear; c_err "Installatie afgebroken."; exit 1' USR1
 cancel() { kill -USR1 $$; exit 1; }
@@ -304,6 +307,10 @@ Nee = sleutel aan root koppelen"; then
     if [[ $1 == 1 ]]; then
       while true; do
         HOST_USER="$(w_input "Toegang tot deze host" "Naam van de gebruiker op de host:" "$HOST_USER")"
+        if user_foreign "$HOST_USER"; then
+          w_msg "Toegang tot deze host" "Gebruiker '$HOST_USER' bestaat al en hoort niet bij dit lab (bijv. het ADC-lab). Kies een eigen gebruiker."
+          continue
+        fi
         [[ $HOST_USER =~ ^[a-z_][a-z0-9_-]{0,30}$ && $HOST_USER != root ]] && break
         w_msg "Toegang tot deze host" "Ongeldige gebruikersnaam: '$HOST_USER'"
       done
@@ -374,6 +381,7 @@ is_prefix "$NAME_PREFIX" || die "Ongeldige NAME_PREFIX '$NAME_PREFIX' (kleine le
 is_hostname "$CT_HOSTNAME" || die "Ongeldige hostname '$CT_HOSTNAME'."
 [[ $HOST_ACCESS == user || $HOST_ACCESS == root ]] || die "HOST_ACCESS moet 'user' of 'root' zijn."
 [[ $HOST_ACCESS == root || ( $HOST_USER =~ ^[a-z_][a-z0-9_-]{0,30}$ && $HOST_USER != root ) ]] || die "Ongeldige HOST_USER."
+[[ $HOST_ACCESS == root ]] || ! user_foreign "$HOST_USER" || die "Gebruiker '$HOST_USER' bestaat al en hoort niet bij dit lab (bijv. het ADC-lab). Kies een eigen HOST_USER."
 
 # --- Debian template -------------------------------------------------------------------
 c_info "Debian 12 LXC-template ophalen naar $TPL_STORAGE..."
