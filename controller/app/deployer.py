@@ -14,7 +14,7 @@ from email.mime.text import MIMEText
 from pathlib import Path
 
 from . import fortigate, updates
-from .config import (ROOT, UPLOADS, contractor_credentials, contractor_totp_secret, get_state, inventory, load_host, load_topology,
+from .config import (ROOT, TIMEZONE, UPLOADS, contractor_credentials, contractor_totp_secret, get_state, inventory, load_host, load_topology,
                      prefixlen, segment_map, template_vmid, update_state,
                      uplink_tag, vm_name)
 from .hostctl import HostError, host
@@ -306,8 +306,8 @@ def build_template(log, topo):
                    timeout=1200, check=True)
         # Tijdzone Europe/Amsterdam, zodat container-logs met de FortiGate en controller
         # synchroon lopen (de default UTC/Pacific liep uit de pas).
-        h.pct_exec(vmid, "ln -sf /usr/share/zoneinfo/Europe/Amsterdam /etc/localtime && "
-                         "echo Europe/Amsterdam > /etc/timezone", check=False)
+        h.pct_exec(vmid, f"ln -sf /usr/share/zoneinfo/{TIMEZONE} /etc/localtime && "
+                         f"echo {TIMEZONE} > /etc/timezone", check=False)
         log("python-omgeving met OT-protocol libraries")
         h.pct_exec(vmid, f"python3 -m venv /opt/otsim/venv && /opt/otsim/venv/bin/pip install -q {PIP_PACKAGES}",
                    timeout=1200, check=True)
@@ -386,7 +386,7 @@ def network_diagnosis(h, vmid) -> list[str]:
 # (passend bij het protocol/identiteit). Dat is mede de voorwaarde voor
 # device-correlatie en virtual patching. IT-hosts, servers en probes blijven neutraal.
 VENDOR_OUI = {
-    "modbus_plc": "00:80:F4",   # Schneider Electric / Telemecanique (Modicon M580)
+    "modbus_plc": "00:00:54",   # Schneider Electric (Modicon M580); 00:80:F4 toonde de FortiGate als "Telemecanique"
     "io_device":  "00:80:F4",   # Schneider field I/O
     "hmi":        "00:80:F4",   # Schneider (Magelis HMI)
     "opcua_gw":   "00:80:F4",   # Schneider OPC UA gateway
@@ -590,8 +590,8 @@ def update_simulators(log):
     for node in inventory(topo):
         if host().status(node["vmid"]) == "running":
             log(f"otsim bijwerken op {node['hostname']}")
-            host().pct_exec(node["vmid"], "ln -sf /usr/share/zoneinfo/Europe/Amsterdam /etc/localtime && "
-                                          "echo Europe/Amsterdam > /etc/timezone", check=False)
+            host().pct_exec(node["vmid"], f"ln -sf /usr/share/zoneinfo/{TIMEZONE} /etc/localtime && "
+                                          f"echo {TIMEZONE} > /etc/timezone", check=False)
             push_otsim(log, node["vmid"])
             sync_packages(log, node)
             write_node_config(node)

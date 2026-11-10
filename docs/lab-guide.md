@@ -90,7 +90,14 @@ wachtwoord wordt één keer gegenereerd en staat in het Testcenter. De jump host
 vraagt daarna een **MFA-code** (TOTP). Het Testcenter toont de actuele code en het
 geheim, zodat je het ook in een authenticator-app kunt zetten.
 
-![Testcenter: de drie ingangen met URL's, logins en het kijkvenster](img/01-toegang.jpg)
+![Testcenter: de drie ingangen met URL's, logins en het kijkvenster, met daaronder de eerste test (`ot-signatures`)](img/01-toegang.jpg)
+
+Deze gids staat ook in de controller, onder het tabblad **Lab guide**: links de
+hoofdstukken, rechts de tekst. Achter elke test-id (zoals `contractor-login`) staat een
+**Draai**-knop met het laatste resultaat, zodat je een test start zonder van tabblad te
+wisselen.
+
+![Lab guide-tabblad in de controller, met Draai-knoppen achter de tests](img/00-labguide-tab.jpg)
 
 ---
 
@@ -174,7 +181,9 @@ hebben we, en wie praat ermee?" Er is geen assetlijst.*
   gerust ook een paar andere tests, zodat elk device verkeer heeft gemaakt.
 - In de FortiGate-GUI:
   - *Security Fabric > Asset Identity Center*, tabblad **Asset Identity List**:
-    elk device met MAC-adres, IP-adres en de poort (laag) waarop het gezien is;
+    elk device met MAC-adres (waaruit de fabrikant volgt), IP-adres, status en de poort
+    (laag) waarop het gezien is. Een device staat pas in de lijst nadat de FortiGate er
+    verkeer van zag;
   - hetzelfde, tabblad **OT View**: de assets per Purdue-level. Elke segmentpoort
     heeft een standaard-level (port2 L3.5, port3 L3, port4 L2, port5 L1, port6 L1,
     port7 L4). FortiOS 7.6 kent op interfaces geen level 0, dus de field I/O valt in L1.
@@ -182,7 +191,7 @@ hebben we, en wie praat ermee?" Er is geen assetlijst.*
   - de Application Control-logs, waar OPC UA, Modbus en S7 als applicatie
     zichtbaar zijn en niet als "TCP 4840" of "TCP 502".
 
-![Asset Identity Center: devices per segment, herkend aan hun verkeer](img/fgt-assets.jpg)
+![Asset Identity List: devices met hun MAC-adres, IP-adres en de poort waarop ze gezien zijn; de OUI (`00:80:f4`, `00:1b:1b`) bepaalt de vendor, het OS staat op Unknown](img/fgt-assets.jpg)
 
 ![OT View: dezelfde assets per Purdue-level, met de FortiGate in L3](img/fgt-otview.jpg)
 
@@ -200,11 +209,18 @@ hebben we, en wie praat ermee?" Er is geen assetlijst.*
   OT-monitor-profiel blokkeert niets, maar logt alles.
 - Elk device heeft een vast MAC-adres met de laatste drie octetten van zijn IP, zodat
   het na een herinstallatie hetzelfde asset blijft. De eerste drie octetten (de OUI)
-  volgen de **fabrikant** die het device simuleert: Schneider/Telemecanique
-  (`00:80:F4`) voor de Modbus-PLC's, field-I/O, HMI en OPC UA-gateway, Siemens
-  (`00:1B:1B`) voor de S7-PLC; servers en probes blijven neutraal (`02:4F:54`). Zo
-  deelt de FortiGate (via de *MAC Address Database*) elk asset meteen bij de juiste
-  vendor in — de basis voor de kwetsbaarheidscorrelatie in hoofdstuk 7.
+  volgen de **fabrikant** die het device simuleert: Schneider Electric (`00:00:54`)
+  voor de Modbus-PLC's, Schneider/Telemecanique (`00:80:F4`) voor field-I/O, HMI en
+  OPC UA-gateway, Siemens (`00:1B:1B`) voor de S7-PLC; servers en probes blijven
+  neutraal (`02:4F:54`). De FortiGate leest de vendor uit de *MAC Address Database*:
+  dat is de eerste stap voor de kwetsbaarheidscorrelatie in hoofdstuk 7.
+- Het **OS** staat bij de simulators op *Unknown* en de kolom *Vulnerabilities* op 0.
+  Dat zijn simulators zonder echte firmware: de FortiGate leidt vendor, protocol en
+  laag af uit MAC-adres en verkeer, maar kent van deze devices geen besturingssysteem.
+  Alleen enkele Linux-servers krijgen een OS (Debian).
+- De lijst vult zich naarmate devices verkeer maken, en meteen na een uitrol is hij
+  nog niet compleet. Wacht een paar minuten en draai een aantal tests voordat je de
+  lijst als referentie gebruikt.
 
 **Les**
 - Zichtbaarheid komt eerst: je kunt niet beschermen wat je niet ziet.
@@ -264,6 +280,8 @@ Vroeger had hij een TeamViewer-sessie rechtstreeks op de EWS.*
    - **Jump host naar de engineering workstation** (`jump-to-ews`): stap 3;
    - **Jump host probeert direct een PLC** (`jump-to-plc`): stap 2.
 
+![Testcenter, groep Remote access: de login via de VIP, de geweigerde poging zonder MFA-code en de hops naar de EWS, met de bijbehorende FortiGate-logregels](img/03-remote-access.jpg)
+
 **Onthulling**
 - Stap 1 gaat door de VIP (WAN :2222 naar 22), stap 3 door de conduit "DMZ jump → L2 EWS".
 - Stap 2 wordt geblokkeerd: de DMZ heeft geen conduit naar L1.
@@ -319,7 +337,7 @@ de doorgelaten en geblokkeerde Industrial-applicaties.
   tune je een signature eerst in monitor-modus voordat je hem op blokkeren zet?
 - Zet de signature daarna weer uit, of draai de policy-uitrol opnieuw.
 
-![Security Events met de signatures aan: links de Industrial-applicaties, rechts honderden read- en write-meldingen op normaal verkeer](img/fgt-security-events.jpg)
+![Security Events: links Application Control met de Industrial-applicaties (veel doorgelaten, een paar geblokkeerde writes), rechts de IPS-melding van de Shellshock-poging](img/fgt-security-events.jpg)
 
 **Voor en na: breek het**
 
@@ -334,7 +352,7 @@ de doorgelaten en geblokkeerde Industrial-applicaties.
   tank-PLC, en de pomp blijft draaien. Binnen een minuut toont de HMI
   **ALARM: TANK LOOPT OVER**.
 
-![SCADA HMI tijdens "Breek het": de tank-PLC staat op 97% en de HMI slaat alarm](img/04-breek-het.jpg)
+![SCADA HMI tijdens "Breek het": setpoint 999, tankniveau 100 en de HMI meldt ALARM: TANK LOOPT OVER; rechts de joblog van de demo](img/04-breek-het.jpg)
 
 - Na 60 seconden zet de controller de policy terug en het setpoint via de HMI op 50.
   Draai daarna **L3 schrijft een Modbus-setpoint** (`l3-modbus-write`) nog eens:
@@ -387,10 +405,14 @@ PLC's en de EWS mogen bij L0.
 - **Tank-PLC probeert naar huis te bellen** (`plc-to-internet`): HTTPS naar 1.1.1.1.
 - **Patch-server haalt updates op** (`patch-to-internet`): hetzelfde, vanaf de DMZ.
 
+![Testcenter: de groepen Uitbraak naar internet en Zichtbaarheid, met de uitkomst en de FortiGate-logregels per test](img/06-uitbraak-zichtbaarheid.jpg)
+
 **Onthulling**
 De PLC komt niet buiten: er is geen policy van L1 naar de WAN, dus de implicit
 deny logt de poging. Alleen de patch-server in de DMZ mag naar buiten, en alleen
 voor HTTP, HTTPS en DNS.
+
+![Forward traffic naar 1.1.1.1: de tank-PLC (10.10.0.10) wordt vijf keer geweigerd door de implicit deny, de patch-server (10.35.0.20) komt via de policy "DMZ patch->Internet" wel door](img/fgt-plc-internet.jpg)
 
 **Les**
 - Uitgaand verkeer is net zo belangrijk als inkomend: een geblokkeerde C2-verbinding
@@ -433,15 +455,18 @@ en die mag over HTTP bij het MES.*
 *kwetsbaarheden van een herkend product*. De FortiGate moet de PLC dus eerst als een
 specifiek apparaat zien. In dit lab stelt de tank-PLC zich voor als een **Schneider
 Modicon M580**, op twee manieren tegelijk:
-- het **MAC-adres** krijgt de Schneider/Telemecanique-OUI `00:80:F4` (de *MAC Address
-  Database* vertaalt dat naar de vendor);
+- het **MAC-adres** krijgt de Schneider Electric-OUI `00:00:54` (de *MAC Address
+  Database* vertaalt dat naar de vendor; de OUI `00:80:F4` toonde de FortiGate als
+  "Telemecanique", dus die gebruiken de PLC's niet);
 - de PLC beantwoordt **Modbus Read Device Identification** (function code 43) met
   vendor *Schneider Electric*, product *BMEP582040 / Modicon M580* en firmware `SV2.70`;
   de HMI vraagt die identiteit periodiek op, zodat het fingerprint de FortiGate passeert.
 
-Controleer in *Security Fabric > Asset Identity Center* dat de PLC als Schneider
-Modicon verschijnt, en open de **IoT/OT-kwetsbaarheden** van dat device: daar komen de
-bekende CVE's met hun **Virtual Patching Signatures** te staan.
+Bekijk in *Security Fabric > Asset Identity Center* de tank-PLC (10.10.0.10): de vendor
+komt uit het MAC-adres. Of de FortiGate daarnaast het model (Modicon M580) en de bijbehorende
+**IoT/OT-kwetsbaarheden** koppelt, hangt af van wat hij uit het device-ID haalt; de
+kolom *Vulnerabilities* laat zien of dat gelukt is. Voor de demo hieronder is dat niet
+nodig: de M580-signature wordt ook expliciet afgedwongen in de **OT-IPS-sensor**.
 
 ![Virtual Patching Signatures: de Modicon M580 UMAS-signatures met hun CVE's (Block)](img/fgt-vpatch-sigs.jpg)
 
@@ -488,7 +513,7 @@ Security Service.
 > Virtual patching leunt op device-herkenning: op een echte PLC koppelt de FortiGate de
 > CVE's automatisch zodra hij het product kent (het **Virtual Patching-profiel** doet dat,
 > zoals bij het MES hierboven). Onze PLC is een simulator, dus laten we hem er zo echt
-> mogelijk uitzien — vendor-MAC `00:80:F4` plus een Modbus device-ID als Modicon M580 —
+> mogelijk uitzien — vendor-MAC `00:00:54` plus een Modbus device-ID als Modicon M580 —
 > én dwingen we de M580-signature bovendien expliciet af in de **OT-IPS-sensor** (block
 > medium+), zodat de enforcement niet alleen van de automatische correlatie afhangt. De
 > virtual-patch-database bevat duizenden van dit soort CVE-signatures voor concrete

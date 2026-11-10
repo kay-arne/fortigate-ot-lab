@@ -425,6 +425,8 @@ pct exec "$CTID" -- sh -c "getent hosts deb.debian.org >/dev/null" || die "Contr
 c_info "Pakketten installeren in de controller..."
 pct exec "$CTID" -- bash -c "export DEBIAN_FRONTEND=noninteractive; apt-get update -q && apt-get install -yq git python3-venv python3-pip openssh-client genisoimage ca-certificates curl >/dev/null"
 
+pct exec "$CTID" -- bash -c "ln -sf /usr/share/zoneinfo/Europe/Amsterdam /etc/localtime && echo Europe/Amsterdam > /etc/timezone" || true
+
 c_info "Repo clonen ($REPO_URL @ $REPO_BRANCH)..."
 pct exec "$CTID" -- git clone --depth 1 -b "$REPO_BRANCH" "$REPO_URL" /opt/otlab
 

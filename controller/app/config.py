@@ -16,6 +16,13 @@ from pathlib import Path
 
 import yaml
 
+# Eén tijdzone voor het hele lab: FortiGate, containers en de controller zelf, zodat de
+# logs onderling synchroon lopen (de default UTC/Pacific liep uren uit de pas).
+TIMEZONE = "Europe/Amsterdam"
+if (Path("/usr/share/zoneinfo") / TIMEZONE).exists():
+    os.environ["TZ"] = TIMEZONE
+    time.tzset()
+
 ROOT = Path(os.environ.get("OTLAB_ROOT", Path(__file__).resolve().parents[2]))
 DATA = ROOT / "data"
 UPLOADS = DATA / "uploads"

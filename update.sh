@@ -48,6 +48,9 @@ if [[ $OLD != "$NEW" ]] && ! git diff --quiet "$OLD" "$NEW" -- otsim; then
   say "Let op: de OT-simulators zijn gewijzigd. Klik in de web UI op 'Simulators bijwerken'."
 fi
 
+# Tijdzone van de controller-container gelijk aan de rest van het lab (ook voor oudere installaties).
+ln -sf /usr/share/zoneinfo/Europe/Amsterdam /etc/localtime && echo Europe/Amsterdam > /etc/timezone || true
+
 say "Controller herstarten..."
 systemctl restart otlab.service
 say "Klaar: $(git log -1 --format='%h %s')"

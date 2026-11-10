@@ -17,7 +17,7 @@ import paramiko
 import requests
 import urllib3
 
-from .config import SIGNATURES, get_state, inventory, netmask, segment_map, update_state, vm_name
+from .config import SIGNATURES, TIMEZONE, get_state, inventory, netmask, segment_map, update_state, vm_name
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -29,9 +29,8 @@ API_USER = "otlab-controller"
 BOOTSTRAP_PASSWORD = "Deployment_Pass2026"
 # Lab: zo lang mogelijk ingelogd blijven in de GUI (FortiOS-maximum, minuten).
 ADMIN_TIMEOUT = 480
-# Tijdzone van de FortiGate (default Pacific is onhandig: logs liepen 8 uur uit de
-# pas met de controller). FortiOS 7.4+ accepteert de IANA-naam.
-TIMEZONE = "Europe/Amsterdam"
+# De FortiGate krijgt dezelfde tijdzone als de rest van het lab (config.TIMEZONE; default
+# Pacific liep 8 uur uit de pas). FortiOS 7.4+ accepteert de IANA-naam.
 
 
 def port_alias(seg) -> str:

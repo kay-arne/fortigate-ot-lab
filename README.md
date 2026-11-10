@@ -175,8 +175,10 @@ met een echte FortiGate-VM gedraaid**. Controleer bij de eerste uitrol vooral:
 - **Device-identificatie (vendor-MAC's + device-ID)**: de FortiGate deelt OT-assets in op o.a. het
   MAC-adres (MAC Address Database → vendor) en het protocol. Daarom krijgt elk gesimuleerd device de
   MAC-OUI van de fabrikant die het nabootst (`VENDOR_OUI` in `controller/app/deployer.py`):
-  Schneider/Telemecanique (`00:80:F4`) voor de Modbus-PLC's, field-I/O, HMI en OPC UA-gateway, Siemens
-  (`00:1B:1B`) voor de S7-PLC; IT-hosts en probes blijven neutraal (`02:4F:54`). Een redeploy werkt de
+  Schneider Electric (`00:00:54`) voor de Modbus-PLC's (de gesimuleerde M580), Schneider/Telemecanique
+  (`00:80:F4`) voor field-I/O, HMI en OPC UA-gateway, Siemens (`00:1B:1B`) voor de S7-PLC; IT-hosts en probes
+  blijven neutraal (`02:4F:54`). De FortiGate noemt `00:80:F4` "Telemecanique" en niet "Schneider Electric";
+  daarom hebben de PLC's een andere Schneider-OUI. Een redeploy werkt de
   MAC op bestaande containers bij. De Modbus-PLC's beantwoorden daarnaast **Modbus Read Device
   Identification (FC43)** als een Schneider **Modicon M580** (firmware `SV2.70`) — `_plc_identity()` in
   `otsim/modbus.py` — en de HMI vraagt die identiteit periodiek op, zodat de FortiGate vendor én model
