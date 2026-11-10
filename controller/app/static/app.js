@@ -16,6 +16,7 @@ function goTo(tab) {
   $$("nav button").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
   $$(".tab").forEach((t) => t.classList.toggle("active", t.id === "tab-" + tab));
   if (tab === "tests") { loadScenarios(); loadAccess(); }
+  if (tab === "guide") loadGuide();
   if (tab === "setup") loadSettings();
   if (tab === "updates") loadVersion();
 }
@@ -540,3 +541,55 @@ loadHost();
 loadVersion().then((v) => v.git && checkUpdates(true));
 refresh();
 setInterval(refresh, 10000);
+
+// --- lab guide ---------------------------------------------------------------
+// De gids is docs/lab-guide.md; elke test-id in code-opmaak (bijv. `break-readonly`)
+// krijgt hier een Draai-knop met het laatste resultaat.
+let guideData = null, guideIdx = 0, guideResults = {}, guideIds = new Set();
+function guideSaved() { try { return localStorage.getItem("otlab-guide-chapter"); } catch (e) { return null; } }
+function showChapter(i, scroll = true) {
+  const chs = guideData.chapters;
+  guideIdx = Math.max(0, Math.min(chs.length - 1, i));
+  const ch = chs[guideIdx];
+  try { localStorage.setItem("otlab-guide-chapter", ch.id); } catch (e) { /* zonder opslag blijft het per pagina */ }
+  $("#guide-content").innerHTML = ch.html;
+  $$("#guide-content code").forEach((c) => {
+    const id = c.textContent.trim();
+    if (!guideIds.has(id) || c.closest("pre")) return;
+    const wrap = document.createElement("span");
+    wrap.className = "guide-run";
+    wrap.innerHTML = `<button class="run-inline" data-gtest="${esc(id)}" title="Test ${esc(id)} draaien">▶ Draai</button><span class="gres" data-gres="${esc(id)}"></span>`;
+    c.after(wrap);
+  });
+  $$("#guide-content [data-gtest]").forEach((b) => (b.onclick = () => action(`/api/scenarios/${b.dataset.gtest}/run`, {}, refreshGuideResults)));
+  $$("#guide-toc li").forEach((li, n) => li.classList.toggle("active", n === guideIdx));
+  $("#guide-prev").disabled = guideIdx === 0;
+  $("#guide-next").disabled = guideIdx === chs.length - 1;
+  paintGuideResults();
+  if (scroll) window.scrollTo({ top: 0 });
+}
+function paintGuideResults() {
+  $$("#guide-content [data-gres]").forEach((el) => {
+    const r = guideResults[el.dataset.gres];
+    el.innerHTML = r ? `<span class="res ${r.passed ? "pass" : "fail"}">${r.passed ? "PASS" : "FAIL"}</span>` : "";
+  });
+}
+async function refreshGuideResults() {
+  try { guideResults = (await api("/api/scenarios")).results; paintGuideResults(); } catch (e) { /* volgende keer */ }
+}
+async function loadGuide() {
+  if (!guideData) {
+    try {
+      const [g, sc] = await Promise.all([api("/api/guide"), api("/api/scenarios")]);
+      guideData = g; guideIds = new Set(sc.scenarios.map((x) => x.id)); guideResults = sc.results;
+    } catch (e) { $("#guide-content").innerHTML = `<p class="warn">Gids laden mislukt: ${esc(e.message)}</p>`; return; }
+    if (!guideData.chapters.length) { $("#guide-content").innerHTML = `<p class="muted">Geen gids gevonden (docs/lab-guide.md).</p>`; return; }
+    $("#guide-toc").innerHTML = guideData.chapters.map((c, n) => `<li data-ch="${n}">${esc(c.title)}</li>`).join("");
+    $$("#guide-toc li").forEach((li) => (li.onclick = () => showChapter(+li.dataset.ch)));
+    $("#guide-prev").onclick = () => showChapter(guideIdx - 1);
+    $("#guide-next").onclick = () => showChapter(guideIdx + 1);
+    showChapter(Math.max(0, guideData.chapters.findIndex((c) => c.id === guideSaved())), false);
+  } else {
+    refreshGuideResults();
+  }
+}

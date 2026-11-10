@@ -111,6 +111,9 @@ geen harde sandbox. Kies je in de wizard voor root, dan komt de sleutel in
    Bestaand lab? Klik op *Simulators bijwerken* om het account, MFA en `otprobe` op de devices te zetten.
 6. **Demo of training**: volg de [lab guide](docs/lab-guide.md), een verhalende rondgang
    ("een nacht bij Polderfris") langs alle tests, met per hoofdstuk de les en de koppeling naar IEC 62443.
+   De gids staat ook in de controller, onder het tabblad **Lab guide**: hoofdstukkenlijst links en bij elke
+   test-id in de tekst een **Draai**-knop met het laatste resultaat. Het tabblad leest `docs/lab-guide.md`,
+   dus dat bestand blijft de enige bron.
 
 ## Wat zit erin
 

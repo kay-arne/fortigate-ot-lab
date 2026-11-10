@@ -11,11 +11,11 @@ import asyncio
 import hashlib
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, deployer, fortigate, jobs, scenarios, updates
+from . import auth, deployer, fortigate, guide, jobs, scenarios, updates
 from .config import (DATA, HOST_FILE, SIGNATURES, UPLOADS, contractor_credentials, contractor_totp_secret, get_state, totp, inventory, load_host, load_topology,
                      template_vmid, update_state)
 from .hostctl import host
@@ -459,6 +459,20 @@ def run_all():
 @app.post("/api/scenarios/{sid}/run")
 def run_one(sid: str):
     return _start(f"Test {sid}", scenarios.run_scenario, sid, exclusive=False)
+
+
+# --- lab guide --------------------------------------------------------------
+@app.get("/api/guide")
+def get_guide():
+    return guide.load()
+
+
+@app.get("/api/guide/img/{name}")
+def guide_image(name: str):
+    found = guide.image(name)
+    if not found:
+        raise HTTPException(404, "afbeelding niet gevonden")
+    return FileResponse(found[0], media_type=found[1], headers={"Cache-Control": "no-cache"})
 
 
 # --- toegang voor de kandidaat ------------------------------------------

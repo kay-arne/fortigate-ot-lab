@@ -17,6 +17,7 @@
     <button data-tab="setup" class="active">1. Setup</button>
     <button data-tab="lab">2. Lab</button>
     <button data-tab="tests">3. Testcenter</button>
+    <button data-tab="guide">Lab guide</button>
     <button data-tab="updates">Updates <span id="update-dot" class="dot-new" hidden></span></button>
   </nav>
   <span id="hoststatus" class="pill">…</span>
@@ -269,6 +270,17 @@
     </div>
   </section>
   <!-- UPDATES -->
+  <!-- LAB GUIDE -->
+  <section id="tab-guide" class="tab">
+    <div class="guide">
+      <aside class="guide-toc"><div class="eyebrow">Hoofdstukken</div><ol id="guide-toc"></ol></aside>
+      <article class="card guide-body">
+        <div id="guide-content" class="prose"><p class="muted">Gids laden...</p></div>
+        <div class="guide-pager"><button id="guide-prev" class="ghost">← Vorige</button><button id="guide-next" class="primary">Volgende →</button></div>
+      </article>
+    </div>
+  </section>
+
   <section id="tab-updates" class="tab">
     <div class="card">
       <div class="card-head"><h2>Controller bijwerken</h2><span id="upd-badge" class="badge"></span></div>
