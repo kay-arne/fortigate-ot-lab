@@ -108,6 +108,8 @@ die niet volledig staat.
 
 - **Bereikbaar?** Open de Lab-tab. De FortiGate-kaart is groen zolang zijn REST API
   antwoordt. Is hij rood, wacht dan tot de VM klaar is met opstarten of rol opnieuw uit.
+  (Draait het lab op een *bestaande FortiGate*, dan staat daar geen VM-status maar de
+  REST API-status; zie de README voor de VLAN-trunk, het API-token en de controle vooraf.)
 - **Licenties actief?** Log in op de FortiGate-GUI (`https://<WAN-IP>`) en ga naar
   *System > FortiGuard*. Onder **FortiGuard Security Services** moeten in elk geval
   deze twee op *Licensed* staan:

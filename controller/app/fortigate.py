@@ -17,7 +17,8 @@ import paramiko
 import requests
 import urllib3
 
-from .config import SIGNATURES, TIMEZONE, get_state, inventory, netmask, segment_map, update_state, vm_name
+from .config import (SIGNATURES, TIMEZONE, get_state, inventory, is_external, netmask, segment_map,
+                     update_state, vm_name)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -138,6 +139,11 @@ def dns_lines(wan) -> list[str]:
 # verbinding
 # --------------------------------------------------------------------------
 def mgmt_ip(topo) -> str:
+    if is_external(topo):
+        host = (topo["fortigate"]["external"].get("host") or "").strip()
+        if not host:
+            raise RuntimeError("Vul het management-adres van de bestaande FortiGate in (Setup-tab).")
+        return host
     wan = topo["fortigate"]["wan"]
     if wan["mode"] == "static" and wan.get("ip"):
         return str(ipaddress.ip_interface(wan["ip"]).ip)
@@ -150,6 +156,22 @@ def mgmt_ip(topo) -> str:
 def base_url(topo) -> str:
     port = topo["fortigate"].get("admin_https_port", 443)
     return f"https://{mgmt_ip(topo)}:{port}"
+
+
+def remote_ip(topo) -> str:
+    """Adres waarop de contractor van buiten de jump host bereikt (VIP :2222). Bij een
+    eigen VM is dat het WAN-/management-IP; bij een bestaande FortiGate het
+    opgegeven externe IP (leeg = geen remote access)."""
+    if is_external(topo):
+        return (topo["fortigate"]["external"].get("wan_ip") or "").split("/")[0].strip()
+    return mgmt_ip(topo)
+
+
+def wan_interface(topo) -> str:
+    """FortiGate-interface richting WAN/internet: port1 op de eigen VM, anders de opgegeven poort."""
+    if is_external(topo):
+        return topo["fortigate"]["external"].get("wan_interface") or "wan1"
+    return "port1"
 
 
 def wait_reachable(log, topo, timeout=1200):
@@ -287,12 +309,56 @@ def _controller_ip_towards(ip: str) -> str:
         s.close()
 
 
+def api_token(topo) -> str | None:
+    """REST API-token: bij een bestaande FortiGate dat van de gebruiker, anders het token
+    van de eigen VM (door de controller aangemaakt)."""
+    st = get_state()
+    return st.get("fgt_ext_api_key") if is_external(topo) else st.get("fgt_api_key")
+
+
 class Api:
     def __init__(self, topo):
         self.base = base_url(topo)
+        self.ext = is_external(topo)
+        # Bestaande FortiGate: onthoud wat het lab zelf aanmaakte ("pad|naam"), zodat we
+        # nooit objecten van een ander overschrijven of verwijderen.
+        self.created = set(get_state().get("fgt_ext_created") or [])
         self.s = requests.Session()
         self.s.verify = False
-        self.s.headers["Authorization"] = f"Bearer {get_state()['fgt_api_key']}"
+        self.s.headers["Authorization"] = f"Bearer {api_token(topo)}"
+
+    def exists(self, path, name) -> bool:
+        r = self.s.get(f"{self.base}/api/v2/{path}/{requests.utils.quote(str(name), safe='')}", timeout=30)
+        return r.status_code == 200
+
+    def _remember(self, path, name):
+        self.created.add(f"{path}|{name}")
+        update_state(fgt_ext_created=sorted(self.created))
+
+    def _conflict(self, path, name):
+        raise RuntimeError(f"'{name}' ({path}) bestaat al op de FortiGate en is niet door het lab aangemaakt. "
+                           "Hernoem of verwijder dat object op de FortiGate en draai de provisioning opnieuw.")
+
+    def upsert_policy(self, name, body):
+        """Firewall-policy op naam (bestaande FortiGate): vrij policy-ID, en alleen een
+        policy van het lab wordt bijgewerkt."""
+        key = f"cmdb/firewall/policy|{name}"
+        body = {k: v for k, v in body.items() if k != "policyid"}
+        found = self.get("cmdb/firewall/policy", filter=f"name=={name}").get("results", [])
+        if found and key not in self.created:
+            self._conflict("cmdb/firewall/policy", name)
+        if found:
+            r = self.s.put(f"{self.base}/api/v2/cmdb/firewall/policy/{found[0]['policyid']}", json=body, timeout=30)
+        else:
+            r = self.s.post(f"{self.base}/api/v2/cmdb/firewall/policy", json=body, timeout=30)
+        if not r.ok:
+            raise RuntimeError(f"cmdb/firewall/policy/{name}: {r.status_code} {r.text[:300]}")
+        self._remember("cmdb/firewall/policy", name)
+        return r.json()
+
+    def delete(self, path, name):
+        r = self.s.delete(f"{self.base}/api/v2/{path}/{requests.utils.quote(str(name), safe='')}", timeout=30)
+        return r.ok or r.status_code == 404
 
     def get(self, path, **params):
         r = self.s.get(f"{self.base}/api/v2/{path}", params=params, timeout=30)
@@ -306,7 +372,17 @@ class Api:
         return r.json()
 
     def upsert(self, path, name, body):
-        """POST, of PUT als het object al bestaat."""
+        """POST, of PUT als het object al bestaat. Op een bestaande FortiGate wordt een
+        object dat niet van het lab is niet overschreven."""
+        if not self.ext:
+            return self._upsert(path, name, body)
+        if f"{path}|{name}" not in self.created and self.exists(path, name):
+            self._conflict(path, name)
+        res = self._upsert(path, name, body)
+        self._remember(path, name)
+        return res
+
+    def _upsert(self, path, name, body):
         r = self.s.post(f"{self.base}/api/v2/{path}", json=body, timeout=30)
         if r.status_code in (424, 500) and ('"error":-5' in r.text.replace(" ", "") or r.status_code == 424):
             r = self.s.put(f"{self.base}/api/v2/{path}/{requests.utils.quote(str(name), safe='')}",
@@ -319,7 +395,7 @@ class Api:
 def api_status(topo) -> dict | None:
     """Snelle check of de REST API antwoordt (voor de statusweergave).
     None als er nog geen API-key is."""
-    if not get_state().get("fgt_api_key"):
+    if not api_token(topo):
         return None
     try:
         r = Api(topo).s.get(f"{base_url(topo)}/api/v2/monitor/system/status", timeout=3)
@@ -407,9 +483,24 @@ def _version_loaded(version) -> bool:
         return False
 
 
+def _ot_signature_status_api(topo) -> dict:
+    """Bestaande FortiGate: geen SSH, dus de pakketversies zijn niet te lezen. Wel kijken we
+    of de FortiGate OT-applicatiesignatures kent; dat is wat de tests nodig hebben."""
+    apps = Api(topo).get("cmdb/application/name", format="name").get("results", [])
+    n = sum(1 for a in apps if OT_APP_PATTERN.search(a["name"]))
+    status = {"state": "ok" if n else "missing", "packages": [], "at": time.time(),
+              "detail": (f"{n} OT-applicatiesignatures aanwezig (pakketversies zijn via de API niet te lezen; "
+                         "zie System > FortiGuard)") if n else
+              "geen OT-applicatiesignatures: laad de OT-pakketten (Lab-tab > OT-signatures uploaden)"}
+    update_state(ot_signatures=status)
+    return status
+
+
 def ot_signature_status(topo) -> dict:
     """Zijn de OT-pakketten geladen? state: ok | missing | unknown (namen niet
     herkend). Het resultaat wordt bewaard voor de weergave in de UI."""
+    if is_external(topo):
+        return _ot_signature_status_api(topo)
     sections = autoupdate_versions(topo)
     packages, absent = [], []
     for label, pat in OT_PACKAGES:
@@ -696,6 +787,8 @@ def _resolve_ot_apps(api, log):
 
 
 def provision(log, topo):
+    if is_external(topo):
+        return provision_external(log, topo)
     wait_reachable(log, topo)
     wait_for_ssh(log, topo)
     try:
@@ -713,8 +806,16 @@ def provision(log, topo):
     ensure_ot_signatures(log, topo)
     ensure_aliases(log, api, topo)
     vpatch = enable_ot_features(log, api, topo)
+    _provision_policies(log, topo, api, vpatch)
+
+
+def _provision_policies(log, topo, api, vpatch):
+    """Adresobjecten, services, profielen, VIP en de Purdue-policies. Gedeeld door de
+    eigen VM en de bestaande FortiGate."""
     segs = segment_map(topo)
     nodes = {n["name"]: n for n in inventory(topo)}
+    wan_if = wan_interface(topo)
+    external = is_external(topo)
 
     log("adresobjecten")
     for seg in topo["segments"]:
@@ -779,20 +880,24 @@ def provision(log, topo):
         "entries": [{"id": 1, "severity": "info low medium high critical", "status": "enable",
                      "action": "pass", "log": "enable"}]})
 
-    log("VIP: remote access naar de DMZ jump host (WAN :2222 -> 22)")
-    wan_ip = mgmt_ip(topo)
-    api.upsert("cmdb/firewall/vip", "VIP-dmz-jump-ssh", {
-        "name": "VIP-dmz-jump-ssh", "extintf": "port1", "extip": wan_ip,
-        "mappedip": [{"range": nodes["dmz-jump"]["ip"]}], "portforward": "enable",
-        "protocol": "tcp", "extport": "2222", "mappedport": "22"})
+    wan_ip = remote_ip(topo)
+    remote_access = bool(wan_ip)
+    if remote_access:
+        log(f"VIP: remote access naar de DMZ jump host ({wan_ip}:2222 -> 22 op {wan_if})")
+        api.upsert("cmdb/firewall/vip", "VIP-dmz-jump-ssh", {
+            "name": "VIP-dmz-jump-ssh", "extintf": wan_if, "extip": wan_ip,
+            "mappedip": [{"range": nodes["dmz-jump"]["ip"]}], "portforward": "enable",
+            "protocol": "tcp", "extport": "2222", "mappedport": "22"})
+    else:
+        log("geen extern IP opgegeven: remote access (VIP :2222) en de contractor-tests worden overgeslagen")
 
     p = {s: segs[s]["port"] for s in segs}
     policies = [
         # naam, srcintf, dstintf, src, dst, service, app-profiel, nat
-        ("WAN->DMZ remote access jump", "port1", p["dmz"], "all", "VIP-dmz-jump-ssh", "SSH", None, False),
+        ("WAN->DMZ remote access jump", wan_if, p["dmz"], "all", "VIP-dmz-jump-ssh", "SSH", None, False),
         ("DMZ jump->L2 EWS (RDP/SSH)", p["dmz"], p["sup"], "dmz-jump", "ews", "SSH", None, False),
         ("DMZ jump->L3 MES", p["dmz"], p["ops"], "dmz-jump", "mes", "HTTP SSH", None, False),
-        ("DMZ patch->Internet", p["dmz"], "port1", "dmz-patch", "all", "HTTP HTTPS DNS", None, True),
+        ("DMZ patch->Internet", p["dmz"], wan_if, "dmz-patch", "all", "HTTP HTTPS DNS", None, True),
         ("L3->DMZ historian mirror", p["ops"], p["dmz"], "historian", "dmz-histmirror", "HTTP", None, False),
         ("L3->L2 historian OPC UA", p["ops"], p["sup"], "historian", "opcua-gw", "OT-OPCUA", "OT-monitor", False),
         ("L3->L1 Modbus read-only", p["ops"], p["ctl"], f"NET-ops", "GRP-PLC-Modbus", "OT-Modbus", "OT-readonly", False),
@@ -803,7 +908,16 @@ def provision(log, topo):
         ("L1 PLC->L0 field I/O", p["ctl"], p["proc"], "GRP-PLC-Modbus", "GRP-IO", "OT-Modbus", "OT-monitor", False),
         ("TestCenter->DMZ jump", p["test"], p["dmz"], "NET-test", "dmz-jump", "SSH", None, False),
     ]
+    if not remote_access:
+        policies = [pol for pol in policies if pol[0] != "WAN->DMZ remote access jump"]
     log(f"{len(policies)} firewall-policies (Purdue conduits); de rest valt op implicit deny (gelogd)")
+
+    def put_policy(pid, name, body):
+        # eigen VM: vaste policy-ID's; bestaande FortiGate: vrij ID, op naam
+        if external:
+            return api.upsert_policy(name[:35], body)
+        return api.upsert("cmdb/firewall/policy", pid, body)
+
     for pid, (name, si, di, src, dst, svc, app, nat) in enumerate(policies, start=1):
         body = {
             "policyid": pid, "name": name[:35], "action": "accept", "schedule": "always",
@@ -816,18 +930,213 @@ def provision(log, topo):
         }
         if app:
             body["application-list"] = app
-        if vpatch and di != "port1":  # virtual patching op alles wat de fabriek in gaat
+        if vpatch and di != wan_if:  # virtual patching op alles wat de fabriek in gaat
             body["virtual-patch-profile"] = vpatch
         try:
-            api.upsert("cmdb/firewall/policy", pid, body)
+            put_policy(pid, name, body)
         except RuntimeError:
             if "virtual-patch-profile" not in body:
                 raise
             log(f"  policy {pid}: virtual-patch-profile geweigerd, zonder opnieuw")
             body.pop("virtual-patch-profile")
-            api.upsert("cmdb/firewall/policy", pid, body)
+            put_policy(pid, name, body)
     update_state(fgt_provisioned=True)
     log("FortiGate OT-provisioning klaar")
+
+
+# --------------------------------------------------------------------------
+# bestaande FortiGate (externe modus)
+# --------------------------------------------------------------------------
+# Globale instellingen die het lab nodig heeft: (omschrijving, pad, veld, gewenste waarde).
+# De oude waarde wordt bewaard en bij het opruimen teruggezet.
+EXT_GLOBALS = [
+    ("IPS: OT/ICS-signatures meenemen", "cmdb/ips/global", "exclude-signatures", "none"),
+    ("Logging naar geheugen", "cmdb/log.memory/setting", "status", "enable"),
+    ("Implicit deny loggen", "cmdb/log/setting", "fwpolicy-implicit-log", "enable"),
+]
+# Verwijdervolgorde bij opruimen: wat naar andere objecten verwijst eerst.
+EXT_DELETE_ORDER = ["cmdb/firewall/policy", "cmdb/firewall/vip", "cmdb/firewall/addrgrp", "cmdb/firewall/address",
+                    "cmdb/firewall.service/custom", "cmdb/application/list", "cmdb/ips/sensor",
+                    "cmdb/virtual-patch/profile", "cmdb/system/dns-server", "cmdb/system/interface"]
+OT_APP_PATTERN = re.compile(r"modbus|s7|siemens|dnp3|iec\.?104|opc|bacnet|enip|cip", re.I)
+
+
+def _single(api, path) -> dict:
+    res = api.get(path).get("results", {})
+    return (res[0] if res else {}) if isinstance(res, list) else (res or {})
+
+
+def _ip_network(value) -> ipaddress.IPv4Network | None:
+    """'10.10.0.1 255.255.255.0' (FortiOS) -> netwerk; None bij geen/ongeldig IP."""
+    try:
+        ip, mask = str(value).split()
+        net = ipaddress.ip_network(f"{ip}/{mask}", strict=False)
+        return None if net.prefixlen == 0 else net
+    except ValueError:
+        return None
+
+
+def _lab_object_names(topo) -> list[tuple[str, str]]:
+    """(pad, naam) van de objecten die het lab aanmaakt, voor de conflictcontrole."""
+    out = [("cmdb/firewall/address", f"NET-{s['id']}") for s in topo["segments"]]
+    out += [("cmdb/firewall/address", n["name"]) for n in inventory(topo)]
+    out += [("cmdb/firewall/addrgrp", g) for g in ("GRP-PLC", "GRP-PLC-Modbus", "GRP-IO")]
+    out += [("cmdb/firewall.service/custom", s) for s in ("OT-Modbus", "OT-S7comm", "OT-OPCUA", "OT-DNP3", "SSH-2222")]
+    out += [("cmdb/application/list", n) for n in ("OT-monitor", "OT-readonly")]
+    out += [("cmdb/ips/sensor", n) for n in (OT_IPS_SENSOR, OT_IPS_SENSOR_NOVP)]
+    out += [("cmdb/virtual-patch/profile", VPATCH_PROFILE), ("cmdb/firewall/vip", "VIP-dmz-jump-ssh")]
+    return out
+
+
+def ext_plan(topo) -> dict:
+    """Controle vooraf (alleen lezen) voor een bestaande FortiGate: bereikbaarheid, interfaces,
+    VLAN-/subnetconflicten, naamconflicten en welke globale instellingen zouden veranderen."""
+    ext = topo["fortigate"]["external"]
+    errors, warnings, ifaces, globals_ = [], [], [], []
+    plan = {"ok": False, "version": "", "errors": errors, "warnings": warnings,
+            "interfaces": ifaces, "globals": globals_}
+    if not api_token(topo):
+        errors.append("Geen API-token ingesteld.")
+        return plan
+    try:
+        st = api_status(topo)
+        if not st or not st["ok"]:
+            errors.append(f"REST API niet bereikbaar op {base_url(topo)}: {(st or {}).get('error', 'geen antwoord')}")
+            return plan
+        plan["version"] = st["version"]
+        api = Api(topo)
+        existing = {i["name"]: i for i in api.get("cmdb/system/interface",
+                                                   format="name|ip|type|interface|vlanid").get("results", [])}
+        for label, key in (("parent-interface", "parent"), ("WAN-interface", "wan_interface")):
+            if not ext.get(key):
+                errors.append(f"{label} is niet ingevuld.")
+            elif ext[key] not in existing:
+                errors.append(f"{label} '{ext[key]}' bestaat niet op de FortiGate.")
+        subnets = {s["id"]: ipaddress.ip_network(s["subnet"]) for s in topo["segments"]}
+        for seg in topo["segments"]:
+            name, vlan = seg["port"], seg["vlan"]
+            ours = f"cmdb/system/interface|{name}" in api.created
+            cur = existing.get(name)
+            if cur and not ours:
+                errors.append(f"interface '{name}' bestaat al op de FortiGate en is niet van het lab.")
+            for other in existing.values():
+                if other["name"] == name:
+                    continue
+                if other.get("type") == "vlan" and other.get("interface") == ext.get("parent") \
+                        and other.get("vlanid") == vlan:
+                    errors.append(f"VLAN {vlan} staat al op {ext.get('parent')} (interface '{other['name']}').")
+                net = _ip_network(other.get("ip"))
+                if net and net.overlaps(subnets[seg["id"]]):
+                    errors.append(f"subnet {subnets[seg['id']]} ({seg['name']}) overlapt met "
+                                  f"interface '{other['name']}' ({net}).")
+            ifaces.append({"name": name, "parent": ext.get("parent"), "vlan": vlan,
+                           "ip": f"{seg['gateway']}/{subnets[seg['id']].prefixlen}",
+                           "status": "bestaat (lab)" if ours else "nieuw"})
+        for r in api.get("cmdb/router/static").get("results", []):
+            net = _ip_network(r.get("dst"))
+            if net and any(net.overlaps(n) for n in subnets.values()):
+                warnings.append(f"statische route {net} overlapt met een lab-subnet.")
+        for path, name in _lab_object_names(topo):
+            if f"{path}|{name}" not in api.created and api.exists(path, name):
+                errors.append(f"object '{name}' ({path.split('/', 1)[1]}) bestaat al en is niet van het lab.")
+        for label, path, field, want in EXT_GLOBALS:
+            cur = _single(api, path).get(field)
+            change = cur != want
+            globals_.append({"label": label, "current": cur, "wanted": want, "change": change})
+            if change and not ext.get("global_tweaks"):
+                warnings.append(f"{label}: staat op '{cur}', het lab verwacht '{want}' "
+                                "(niet aangepast: globale instellingen staan uit); tests kunnen falen.")
+        if not ext.get("wan_ip"):
+            warnings.append("geen extern IP voor remote access: de VIP :2222 en de contractor-tests worden overgeslagen.")
+    except (requests.RequestException, RuntimeError, ValueError, KeyError) as e:
+        errors.append(f"controle mislukt: {e}")
+    plan["ok"] = not errors
+    return plan
+
+
+def _apply_ext_globals(log, api, ext):
+    prev = dict(get_state().get("fgt_ext_globals_prev") or {})
+    for label, path, field, want in EXT_GLOBALS:
+        cur = _single(api, path).get(field)
+        if cur == want:
+            continue
+        if not ext.get("global_tweaks"):
+            log(f"⚠ {label}: staat op '{cur}' (nodig: '{want}'); niet aangepast")
+            continue
+        prev.setdefault(f"{path}|{field}", cur)
+        api.put(path, {field: want})
+        log(f"  {label}: '{cur}' -> '{want}' (wordt bij opruimen teruggezet)")
+    update_state(fgt_ext_globals_prev=prev)
+
+
+def provision_external(log, topo):
+    """Het lab op een bestaande FortiGate: geen VM-uitrol en geen wijziging van wachtwoord,
+    hostname of routes. Alleen VLAN-subinterfaces, objecten en policies van het lab (die
+    worden bijgehouden voor het opruimen), plus de globale instellingen uit EXT_GLOBALS."""
+    ext = topo["fortigate"]["external"]
+    log(f"bestaande FortiGate {mgmt_ip(topo)}: VLAN-subinterfaces op {ext.get('parent')}, WAN = {wan_interface(topo)}")
+    plan = ext_plan(topo)
+    for w in plan["warnings"]:
+        log(f"⚠ {w}")
+    if not plan["ok"]:
+        raise RuntimeError("Controle vooraf afgekeurd:\n- " + "\n- ".join(plan["errors"]))
+    log(f"FortiOS {plan['version']}, geen conflicten")
+    api = Api(topo)
+    log("VLAN-subinterfaces (één per segment)")
+    for seg in topo["segments"]:
+        name = seg["port"]
+        api.upsert("cmdb/system/interface", name, {
+            "name": name, "vdom": "root", "type": "vlan", "interface": ext["parent"], "vlanid": seg["vlan"],
+            "mode": "static", "ip": f"{seg['gateway']} {netmask(seg['subnet'])}", "allowaccess": "ping",
+            "alias": port_alias(seg), "role": "lan", "device-identification": "enable",
+            "description": f"otlab {seg['name']}"})
+        log(f"  {name}: VLAN {seg['vlan']} op {ext['parent']}, {seg['gateway']} ({seg['name']})")
+        try:  # de FortiGate is DNS-proxy voor de segmenten, zoals bij de eigen VM
+            api.upsert("cmdb/system/dns-server", name, {"name": name, "mode": "forward-only"})
+        except (RuntimeError, requests.RequestException) as e:
+            log(f"  ⚠ DNS-proxy op {name} niet gezet: {str(e)[:120]}")
+    log("globale instellingen")
+    _apply_ext_globals(log, api, ext)
+    ensure_ot_signatures(log, topo)
+    ensure_aliases(log, api, topo)
+    vpatch = enable_ot_features(log, api, topo)
+    _provision_policies(log, topo, api, vpatch)
+
+
+def cleanup_external(log, topo):
+    """Verwijdert alleen wat het lab op de bestaande FortiGate aanmaakte en zet de globale
+    instellingen terug. Objecten die er al waren worden nooit aangeraakt."""
+    api = Api(topo)
+    by_path: dict[str, list[str]] = {}
+    for key in sorted(api.created):
+        path, name = key.split("|", 1)
+        by_path.setdefault(path, []).append(name)
+    if not by_path:
+        log("er staat niets van het lab op de FortiGate")
+    failed = []
+    for path in EXT_DELETE_ORDER + [p for p in by_path if p not in EXT_DELETE_ORDER]:
+        for name in by_path.get(path, []):
+            target = name
+            if path == "cmdb/firewall/policy":
+                found = api.get(path, filter=f"name=={name}").get("results", [])
+                if not found:
+                    continue
+                target = found[0]["policyid"]
+            if api.delete(path, target):
+                log(f"  verwijderd: {path.split('/', 1)[1]} {name}")
+            else:
+                failed.append(f"{path}|{name}")
+                log(f"  ⚠ niet verwijderd: {path.split('/', 1)[1]} {name}")
+    prev = get_state().get("fgt_ext_globals_prev") or {}
+    for key, old in prev.items():
+        path, field = key.split("|", 1)
+        try:
+            api.put(path, {field: old})
+            log(f"  teruggezet: {path} {field} = {old}")
+        except (RuntimeError, requests.RequestException) as e:
+            log(f"  ⚠ {path} {field} niet teruggezet: {str(e)[:120]}")
+    update_state(fgt_ext_created=sorted(failed), fgt_ext_globals_prev={}, fgt_provisioned=False)
+    log("opruimen klaar" + (f"; {len(failed)} object(en) bleven staan" if failed else ""))
 
 
 # --------------------------------------------------------------------------

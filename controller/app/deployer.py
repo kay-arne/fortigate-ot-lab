@@ -14,7 +14,7 @@ from email.mime.text import MIMEText
 from pathlib import Path
 
 from . import fortigate, updates
-from .config import (ROOT, TIMEZONE, UPLOADS, contractor_credentials, contractor_totp_secret, get_state, inventory, load_host, load_topology,
+from .config import (ROOT, TIMEZONE, UPLOADS, is_external, contractor_credentials, contractor_totp_secret, get_state, inventory, load_host, load_topology,
                      prefixlen, segment_map, template_vmid, update_state,
                      uplink_tag, vm_name)
 from .hostctl import HostError, host
@@ -38,12 +38,19 @@ def lab_status() -> dict:
         return r.get("status", "unknown") if r else "absent"
 
     links = set(h.run("ls /sys/class/net").split())
-    fgt_status = st(topo["fortigate"]["vmid"])
-    api = fortigate.api_status(topo) if fgt_status == "running" else None
+    external = is_external(topo)
+    # Bij een bestaande FortiGate is er geen VM: het VMID uit de topologie hoort dan niet bij het lab.
+    fgt_status = "external" if external else st(topo["fortigate"]["vmid"])
+    try:
+        api = fortigate.api_status(topo) if (external or fgt_status == "running") else None
+    except RuntimeError:  # extern, nog geen management-adres ingevuld
+        api = None
     return {
-        "fortigate": {"vmid": topo["fortigate"]["vmid"], "status": fgt_status,
-                      "name": vm_name(topo, topo["fortigate"]["name"]),
-                      "wan": topo["fortigate"]["wan"], "api": bool(get_state().get("fgt_api_key")),
+        "fortigate": {"vmid": None if external else topo["fortigate"]["vmid"], "status": fgt_status,
+                      "external": external,
+                      "name": (topo["fortigate"]["external"].get("host") or "bestaande FortiGate") if external
+                      else vm_name(topo, topo["fortigate"]["name"]),
+                      "wan": topo["fortigate"]["wan"], "api": bool(fortigate.api_token(topo)),
                       "api_ok": bool(api and api["ok"]), "version": (api or {}).get("version", ""),
                       "api_error": (api or {}).get("error", ""),
                       "signatures": get_state().get("ot_signatures")},
@@ -56,7 +63,34 @@ def lab_status() -> dict:
 # --------------------------------------------------------------------------
 # netwerk
 # --------------------------------------------------------------------------
+def seg_net(seg) -> str:
+    """Bridge-opties voor net0 van een container: bij een bestaande FortiGate de trunk-bridge
+    met VLAN-tag, anders de eigen bridge van het segment."""
+    return f"bridge={seg['bridge']}" + (f",tag={seg['tag']}" if seg.get("tag") else "")
+
+
+def trunk_check(topo) -> dict:
+    """Bestaande FortiGate: bestaat de trunk-bridge en is hij VLAN-aware? Alleen lezen."""
+    br = topo["segments"][0]["bridge"]
+    out = host().run(f"cat /sys/class/net/{shlex.quote(br)}/bridge/vlan_filtering 2>/dev/null || echo missing",
+                     check=False).strip()
+    if out == "missing":
+        return {"ok": False, "bridge": br, "error": f"bridge {br} bestaat niet op de Proxmox-host"}
+    if out != "1":
+        return {"ok": False, "bridge": br,
+                "error": f"bridge {br} is niet VLAN-aware: zet in Proxmox bij Node > Network > {br} "
+                         "'VLAN aware' aan en pas de netwerkconfig toe"}
+    return {"ok": True, "bridge": br, "error": ""}
+
+
 def ensure_bridges(log, topo):
+    if is_external(topo):
+        t = trunk_check(topo)
+        if not t["ok"]:
+            raise RuntimeError(t["error"])
+        log(f"trunk-bridge {t['bridge']} is VLAN-aware; segmenten zijn VLAN's "
+            + ", ".join(f"{s['vlan']} ({s['name']})" for s in topo["segments"]))
+        return
     h = host()
     links = set(h.run("ls /sys/class/net").split())
     created = False
@@ -74,6 +108,9 @@ def ensure_bridges(log, topo):
 
 
 def remove_bridges(log, topo):
+    if is_external(topo):
+        log("bestaande FortiGate: de trunk-bridge is van jou en blijft staan")
+        return
     h = host()
     links = set(h.run("ls /sys/class/net").split())
     removed = False
@@ -90,6 +127,10 @@ def remove_bridges(log, topo):
 # FortiGate
 # --------------------------------------------------------------------------
 def deploy_fortigate(log, topo):
+    if is_external(topo):
+        log(f"bestaande FortiGate ({fortigate.mgmt_ip(topo)}): geen VM uitrollen; "
+            "de configuratie volgt bij de provisioning")
+        return
     h = host()
     hcfg = load_host()
     state = get_state()
@@ -429,7 +470,7 @@ def deploy_node(log, topo, node):
         if node_hwaddr(node).lower() != want.lower():
             log(f"{node['hostname']} ({vmid}) bestaat al; MAC bijwerken naar {want}")
             h.run(["pct", "set", str(vmid), "--net0",
-                   f"name=eth0,bridge={seg['bridge']},hwaddr={want},"
+                   f"name=eth0,{seg_net(seg)},hwaddr={want},"
                    f"ip={node['ip']}/{prefixlen(seg['subnet'])},gw={seg['gateway']}"])
             h.run(["pct", "reboot", str(vmid)], check=False)
         else:
@@ -443,7 +484,7 @@ def deploy_node(log, topo, node):
         log("  linked clone niet mogelijk op deze storage, full clone")
         h.run(["pct", "clone", str(tpl), str(vmid), "--hostname", node["hostname"], "--full", "1"])
     h.run(["pct", "set", str(vmid),
-           "--net0", f"name=eth0,bridge={seg['bridge']},hwaddr={node_mac(node)},"
+           "--net0", f"name=eth0,{seg_net(seg)},hwaddr={node_mac(node)},"
                      f"ip={node['ip']}/{prefixlen(seg['subnet'])},gw={seg['gateway']}",
            "--cores", str(res["cores"]), "--memory", str(res["memory"]),
            "--nameserver", seg["gateway"],
@@ -645,8 +686,12 @@ def destroy_selected(log, items):
     for n in nodes:
         _destroy_vmid(log, h, n["vmid"], n["hostname"])
     if "fortigate" in items:
-        _destroy_vmid(log, h, topo["fortigate"]["vmid"], vm_name(topo, topo["fortigate"]["name"]))
-        update_state(fgt_api_key=None, fgt_provisioned=False, fgt_password_applied=False)
+        if is_external(topo):
+            log("bestaande FortiGate: er is geen VM om te verwijderen. Gebruik 'Lab-config van de "
+                "FortiGate verwijderen' om de VLAN-interfaces, objecten en policies op te ruimen.")
+        else:
+            _destroy_vmid(log, h, topo["fortigate"]["vmid"], vm_name(topo, topo["fortigate"]["name"]))
+            update_state(fgt_api_key=None, fgt_provisioned=False, fgt_password_applied=False)
     if "template" in items:
         try:
             _destroy_vmid(log, h, template_vmid(topo), vm_name(topo, "template"))
@@ -654,7 +699,8 @@ def destroy_selected(log, items):
             raise RuntimeError(f"template kan niet weg: {e}. Linked clones gebruiken het nog; "
                                "verwijder eerst de containers die ervan gekloond zijn.") from None
     if "network" in items:
-        lab_ids = [topo["fortigate"]["vmid"], template_vmid(topo)] + [n["vmid"] for n in inventory(topo)]
+        lab_ids = ([] if is_external(topo) else [topo["fortigate"]["vmid"]]) + [template_vmid(topo)] \
+            + [n["vmid"] for n in inventory(topo)]
         still = [v for v in lab_ids if h.exists(v)]
         if still:
             log(f"bridges niet verwijderd: nog {len(still)} lab-VM's/containers gebruiken ze")
@@ -693,7 +739,7 @@ def deploy_selected(log, items, recreate=False):
 def destroy_all(log, remove_template=False, remove_net=False):
     topo = load_topology()
     h = host()
-    ids = [n["vmid"] for n in inventory(topo)] + [topo["fortigate"]["vmid"]]
+    ids = [n["vmid"] for n in inventory(topo)] + ([] if is_external(topo) else [topo["fortigate"]["vmid"]])
     if remove_template:
         ids.append(template_vmid(topo))
     for vmid in ids:
@@ -706,4 +752,7 @@ def destroy_all(log, remove_template=False, remove_net=False):
         h.run([tool, "destroy", str(vmid), "--purge", "1"], check=False)
     if remove_net:
         remove_bridges(log, topo)
-    update_state(deployed=False, fgt_api_key=None, fgt_password_applied=False)
+    if is_external(topo):
+        update_state(deployed=False)  # het API-token van de bestaande FortiGate blijft staan
+    else:
+        update_state(deployed=False, fgt_api_key=None, fgt_password_applied=False)

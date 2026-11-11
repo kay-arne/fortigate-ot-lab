@@ -54,7 +54,53 @@ def load_topology() -> dict:
         topo["fortigate"]["vmid"] = lab["vmid_base"]
     # WAN-instellingen uit de UI overschrijven de defaults uit de YAML.
     topo["fortigate"]["wan"].update(get_state().get("wan", {}))
+    topo["fortigate"]["mode"] = "vm"
+    ext = external_settings()
+    if ext["enabled"]:
+        apply_external(topo, ext)
     return topo
+
+
+# --------------------------------------------------------------------------
+# bestaande FortiGate i.p.v. een VM op Proxmox
+# --------------------------------------------------------------------------
+EXTERNAL_DEFAULTS = {
+    "host": "",            # management-adres van de bestaande FortiGate
+    "port": 443,           # HTTPS-poort van de GUI/REST API
+    "parent": "",          # FortiGate-poort die aan de trunk hangt (VLAN-subinterfaces komen hierop)
+    "trunk_bridge": "",    # VLAN-aware Proxmox-bridge richting die poort; leeg = uplink-bridge
+    "wan_interface": "",   # FortiGate-interface richting internet/WAN (policies en VIP)
+    "wan_ip": "",          # extern IP voor remote access (VIP :2222); leeg = geen VIP
+    "vlans": {},           # segment-id -> VLAN-ID (override van de default uit topology.yaml)
+    "global_tweaks": True,  # IPS-OT-signatures en logging aanzetten (globale instellingen)
+}
+
+
+def external_settings() -> dict:
+    s = get_state()
+    ext = {**EXTERNAL_DEFAULTS, **(s.get("fgt_external") or {})}
+    ext["enabled"] = s.get("fgt_mode") == "external"
+    return ext
+
+
+def apply_external(topo: dict, ext: dict) -> None:
+    """Externe modus: de segmenten worden VLAN's op één trunk-bridge, en elk segment
+    wordt op de FortiGate een VLAN-subinterface (ot<vlan>) met het gateway-adres."""
+    fgt = topo["fortigate"]
+    fgt["mode"] = "external"
+    fgt["external"] = ext
+    fgt["admin_https_port"] = int(ext.get("port") or 443)
+    fgt["wan"] = {"mode": "static", "ip": ext.get("wan_ip") or "", "gateway": "", "dns1": "", "dns2": ""}
+    trunk = ext.get("trunk_bridge") or topo["lab"]["uplink_bridge"]
+    for seg in topo["segments"]:
+        seg["vlan"] = int((ext.get("vlans") or {}).get(seg["id"]) or seg.get("vlan") or 0)
+        seg["port"] = f"ot{seg['vlan']}"
+        seg["bridge"] = trunk
+        seg["tag"] = seg["vlan"]
+
+
+def is_external(topo: dict) -> bool:
+    return topo["fortigate"].get("mode") == "external"
 
 
 def vm_name(topo: dict, name: str) -> str:

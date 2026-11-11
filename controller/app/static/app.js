@@ -94,6 +94,7 @@ function renderLab(lab) {
   const bySeg = {};
   lab.nodes.forEach((n) => (bySeg[n.segment] ||= []).push(n));
   const f = lab.fortigate;
+  CLABEL.fortigate = f.external ? "FortiGate (extern)" : "FortiGate-VM";
   const sg = f.signatures;
   const t = lab.template || { vmid: "-", status: "unknown" };
   const bridges = lab.segments.filter((s) => s.present).length;
@@ -101,20 +102,24 @@ function renderLab(lab) {
     <div class="zone" style="border-left-color:#666"><div class="meta"><b>L4/L5 Enterprise</b><div class="lvl">fysiek netwerk (vmbr0)</div></div>
       <div class="nodes"><div class="node"><div class="n">Jouw IT-netwerk</div><div class="ip">enige toegang loopt via de FortiGate</div></div></div></div>
     <div class="infra">
-      <div class="comp${f.api_ok ? " comp-ok" : ""}" data-comp="fortigate">${check()}<span class="dot ${f.status}"></span>
-        <div><b>${esc(f.name || "FortiGate")} · ${f.vmid}</b><div class="ip">port1 ${esc(f.wan.ip || f.wan.mode)} · status: ${esc(f.status)}${f.version ? ` · ${esc(f.version)}` : ""}</div></div></div>
+      <div class="comp${f.api_ok ? " comp-ok" : ""}" data-comp="fortigate">${check()}<span class="dot ${f.external ? (f.api_ok ? "running" : "stopped") : f.status}"></span>
+        <div><b>${esc(f.name || "FortiGate")}${f.external ? "" : ` · ${f.vmid}`}</b><div class="ip">${f.external
+          ? `bestaande FortiGate · REST API ${f.api_ok ? "antwoordt" : f.api ? "antwoordt niet" : "geen token"}`
+          : `port1 ${esc(f.wan.ip || f.wan.mode)} · status: ${esc(f.status)}`}${f.version ? ` · ${esc(f.version)}` : ""}</div></div></div>
       <div class="comp" data-comp="policies">${check()}<span class="dot ${f.api_ok ? "running" : f.api ? "stopped" : "absent"}"></span>
         <div><b>FortiGate-policies</b><div class="ip" title="${esc(f.api_error || "")}">REST API ${f.api_ok ? "antwoordt" : f.api ? "antwoordt niet" : "nog niet gekoppeld"} · adressen, conduits, OT-profielen</div></div></div>
       <div class="comp${sg && sg.state === "ok" ? " comp-ok" : ""}" style="cursor:default">${check().replace("<input", '<input style="visibility:hidden"')}<span class="dot ${sg ? (sg.state === "ok" ? "running" : sg.state === "missing" ? "stopped" : "absent") : "absent"}"></span>
         <div><b>OT-signatures</b><div class="ip" title="${esc(sg ? sg.detail : "")}">${sg ? (sg.state === "ok" ? "geladen" : sg.state === "missing" ? "ONTBREKEN: het lab werkt zonder niet" : "niet te controleren") : "nog niet gecontroleerd"} · IoT/OT Detect, Patch, Threat, MAC-database</div></div></div>
       <div class="comp" data-comp="network">${check()}<span class="dot ${bridges === lab.segments.length ? "running" : bridges ? "stopped" : "absent"}"></span>
-        <div><b>Netwerk</b><div class="ip">${bridges}/${lab.segments.length} Purdue-bridges aanwezig</div></div></div>
+        <div><b>Netwerk</b><div class="ip">${f.external
+          ? `trunk-bridge ${esc((lab.segments[0] || {}).bridge || "")} ${bridges ? "aanwezig" : "ontbreekt"} · ${lab.segments.length} VLAN's`
+          : `${bridges}/${lab.segments.length} Purdue-bridges aanwezig`}</div></div></div>
       <div class="comp" data-comp="template">${check()}<span class="dot ${t.status === "stopped" ? "running" : t.status}"></span>
         <div><b>LXC-template · ${t.vmid}</b><div class="ip">${t.status === "absent" ? "nog niet gebouwd" : "basis voor alle containers"}</div></div></div>
     </div>`;
   lab.segments.forEach((s) => {
     html += `<div class="zone"><div class="meta"><label class="segsel"><input type="checkbox" data-seg-select="${esc(s.id)}"> <b>${esc(s.name)}</b></label>
-      <div class="lvl">${esc(s.port)} · ${esc(s.bridge)} ${s.present ? "" : "(ontbreekt)"} · ${esc(s.subnet)}</div></div><div class="nodes">`;
+      <div class="lvl">${esc(s.port)} · ${esc(s.bridge)}${s.tag ? ` VLAN ${s.tag}` : ""} ${s.present ? "" : "(ontbreekt)"} · ${esc(s.subnet)}</div></div><div class="nodes">`;
     (bySeg[s.id] || []).forEach((n) => {
       html += `<div class="node ${n.kind}" data-comp="node:${esc(n.name)}" data-seg="${esc(s.id)}">
         <div class="n">${check()}<span class="dot ${n.status}"></span>${esc(n.hostname || n.name)}</div>
@@ -184,7 +189,66 @@ function fillSettings(s) {
   if (lic) lic.checked = true;
   toggleWan();
   toggleLic();
+  fillExternal(s);
 }
+
+// --- bestaande FortiGate ---------------------------------------------------
+function applyMode(mode) {
+  $$("[data-vm-only]").forEach((el) => (el.hidden = mode === "external"));
+  $$("[data-ext-only]").forEach((el) => (el.hidden = mode !== "external"));
+}
+function fillExternal(s) {
+  const mode = s.fgt_mode || "vm";
+  const radio = $(`input[name=fgtmode][value=${mode}]`);
+  if (radio) radio.checked = true;
+  applyMode(mode);
+  const e = s.external || {};
+  $("#e-host").value = e.host || "";
+  $("#e-port").value = e.port || 443;
+  $("#e-token").value = e.token || "";
+  $("#e-parent").value = e.parent || "";
+  $("#e-trunk").value = e.trunk_bridge || "";
+  $("#e-trunk").placeholder = e.trunk_default || "";
+  $("#e-trunk-default").textContent = e.trunk_default ? `(${e.trunk_default})` : "";
+  $("#e-wan").value = e.wan_interface || "";
+  $("#e-wanip").value = e.wan_ip || "";
+  $("#e-tweaks").checked = e.global_tweaks !== false;
+  $("#vlan-table").innerHTML = "<tr><th>Segment</th><th>VLAN-ID</th><th>Interface op de FortiGate</th><th>Subnet · gateway</th></tr>"
+    + (s.segments || []).map((g) => `<tr><td>${esc(g.name)}</td>
+      <td><input class="vlan-in" data-vlanseg="${esc(g.id)}" type="number" min="1" max="4094" value="${g.vlan}" style="width:90px"></td>
+      <td><span class="mono" data-ifname="${esc(g.id)}">ot${g.vlan}</span></td>
+      <td class="mono">${esc(g.subnet)} · ${esc(g.gateway)}</td></tr>`).join("");
+  $$(".vlan-in").forEach((i) => i.addEventListener("input", () => {
+    $(`[data-ifname=${i.dataset.vlanseg}]`).textContent = "ot" + i.value;
+  }));
+}
+$$("input[name=fgtmode]").forEach((r) => r.addEventListener("change", () => applyMode(r.value)));
+
+function renderPlan(p) {
+  const li = (cls, arr) => (arr || []).map((x) => `<li class="${cls}">${esc(x)}</li>`).join("");
+  const trunk = p.trunk ? (p.trunk.ok ? `✓ trunk-bridge ${esc(p.trunk.bridge)} is VLAN-aware` : `✖ ${esc(p.trunk.error)}`) : "";
+  return `<div class="plan-head"><b class="${p.ok ? "ok" : "bad"}">${p.ok ? "✓ Geen blokkades" : "✖ Niet klaar"}</b>
+      ${p.version ? `<span class="muted">FortiOS ${esc(p.version)}</span>` : ""} <span class="muted">${trunk}</span></div>
+    <ul class="plan-list">${li("bad", p.errors)}${li("warn", p.warnings)}</ul>
+    ${(p.interfaces || []).length ? `<table><tr><th>Interface</th><th>Parent</th><th>VLAN</th><th>IP</th><th>Status</th></tr>${p.interfaces.map((i) =>
+      `<tr><td class="mono">${esc(i.name)}</td><td>${esc(i.parent)}</td><td>${i.vlan}</td><td class="mono">${esc(i.ip)}</td><td>${esc(i.status)}</td></tr>`).join("")}</table>` : ""}
+    ${(p.globals || []).length ? `<table><tr><th>Globale instelling</th><th>Nu</th><th>Lab</th><th></th></tr>${p.globals.map((g) =>
+      `<tr><td>${esc(g.label)}</td><td class="mono">${esc(g.current)}</td><td class="mono">${esc(g.wanted)}</td><td>${g.change ? "wordt aangepast" : "ok"}</td></tr>`).join("")}</table>` : ""}`;
+}
+$("#btn-ext-plan").onclick = async () => {
+  const box = $("#ext-plan");
+  box.hidden = false;
+  box.innerHTML = `<p class="muted">Instellingen opslaan en controleren...</p>`;
+  try {
+    fillSettings(await post("/api/settings", savePayload.ext()));
+    box.innerHTML = renderPlan(await post("/api/fortigate/external/plan"));
+  } catch (e) { box.innerHTML = `<p class="warn">${esc(e.message)}</p>`; }
+};
+$("#btn-ext-cleanup").onclick = () => {
+  if (!confirm("Alle VLAN-interfaces, objecten en policies die het lab op de FortiGate aanmaakte worden verwijderd "
+    + "(andere objecten blijven staan) en de globale instellingen worden teruggezet. Doorgaan?")) return;
+  action("/api/fortigate/external/cleanup", {}, () => {});
+};
 
 async function loadSettings() {
   fillSettings(await api("/api/settings"));
@@ -235,6 +299,14 @@ const savePayload = {
   wan: () => ({ wan_mode: $("#i-wanmode").value, wan_ip: $("#i-wanip").value.trim(),
                 wan_gateway: $("#i-wangw").value.trim(), fgt_mgmt_ip: $("#i-mgmtip").value.trim(),
                 wan_dns1: $("#i-dns1").value.trim(), wan_dns2: $("#i-dns2").value.trim() }),
+  mode: () => ({ fgt_mode: ($("input[name=fgtmode]:checked") || {}).value || "vm" }),
+  ext: () => ({
+    ext_host: $("#e-host").value.trim(), ext_port: Number($("#e-port").value) || 443,
+    ext_token: $("#e-token").value.trim() || null, ext_parent: $("#e-parent").value.trim(),
+    ext_trunk: $("#e-trunk").value.trim(), ext_wan_interface: $("#e-wan").value.trim(),
+    ext_wan_ip: $("#e-wanip").value.trim(), ext_global_tweaks: $("#e-tweaks").checked,
+    ext_vlans: Object.fromEntries([...$$(".vlan-in")].map((i) => [i.dataset.vlanseg, Number(i.value)])),
+  }),
   admin: () => ({ admin_password: $("#i-adminpw").value }),
   license: () => ({ license_mode: ($("input[name=lic]:checked") || {}).value || "none",
                     fortiflex_token: $("#i-token").value.trim() || null }),
@@ -367,11 +439,14 @@ async function loadAccess() {
   const wan = a.wan_ip || "&lt;WAN-IP&gt;";
   const viewers = a.viewers.map((v) =>
     `<button class="ghost" data-view="${esc(v.name)}" title="${esc(v.hostname)} · ${esc(v.ip)}">${esc(v.title || VIEW_LABEL[v.role] || v.hostname)}</button>`).join(" ");
+  const loginRow = a.external
+    ? `<tr><th>Login</th><td><span class="muted">je eigen beheerdersaccount op de FortiGate</span></td></tr>`
+    : `<tr><th>Login</th><td><div class="row"><span class="mono">${esc(a.fgt_user)}</span><span class="muted">/</span>${secretRow("acc-fgtpw", a.fgt_password)}</div></td></tr>`;
   $("#access").innerHTML = `
     <div class="acc"><h3>1. FortiGate-GUI <span class="tag">security-team</span></h3>
       <p>Logs, policies en assets: hier zie je wát er gebeurde.</p>
       <table class="kv"><tr><th>URL</th><td>${a.fgt_url ? `<a href="${esc(a.fgt_url)}" target="_blank" rel="noopener">${esc(a.fgt_url)}</a>` : "-"}</td></tr>
-        <tr><th>Login</th><td><div class="row"><span class="mono">${esc(a.fgt_user)}</span><span class="muted">/</span>${secretRow("acc-fgtpw", a.fgt_password)}</div></td></tr></table></div>
+        ${loginRow}</table></div>
     <div class="acc"><h3>2. Contractor via jump host <span class="tag">door de FortiGate</span></h3>
       <p>Het pad van Remco: SSH via de VIP naar de jump host in de DMZ, en van daar alleen naar de EWS.</p>
       <table class="kv"><tr><th>Jump host</th><td><code>ssh -p ${a.jump_port} ${esc(a.user)}@${wan}</code></td></tr>

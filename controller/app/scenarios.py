@@ -170,7 +170,10 @@ def check_contractor_login(log, topo, mfa=True) -> dict:
     doet: wachtwoord én TOTP-code, daarna een commando in de opgenomen shell.
     Met mfa=False klopt het wachtwoord wel, maar de code niet."""
     user, pw = contractor_credentials()
-    ip = fortigate.mgmt_ip(topo)
+    ip = fortigate.remote_ip(topo)
+    if not ip:
+        return {"ok": False, "detail": "geen extern IP ingesteld voor remote access (Setup-tab, bestaande FortiGate)",
+                "srcip": None}
     code = totp(contractor_totp_secret()) if mfa else "000000"
 
     def answer(title, instructions, prompts):

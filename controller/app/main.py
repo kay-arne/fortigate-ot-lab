@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from . import auth, deployer, fortigate, guide, jobs, scenarios, updates
 from .config import (DATA, HOST_FILE, SIGNATURES, UPLOADS, contractor_credentials, contractor_totp_secret, get_state, totp, inventory, load_host, load_topology,
-                     template_vmid, update_state)
+                     template_vmid, update_state, external_settings, is_external)
 from .hostctl import host
 
 HERE = Path(__file__).parent
@@ -98,16 +98,35 @@ def public_state() -> dict:
     image = s.get("fgt_image")
     image_size = (UPLOADS / image).stat().st_size if image and (UPLOADS / image).exists() else None
     lic_mode = s.get("license_mode", "none")
-    checks = [
-        {"id": "host", "label": "Proxmox-koppeling", "ok": HOST_FILE.exists()},
-        {"id": "image", "label": "FortiGate-image", "ok": bool(image_size)},
-        {"id": "wan", "label": "WAN-adres port1", "ok": wan["mode"] == "dhcp" or bool(wan.get("ip") and wan.get("gateway"))},
-        {"id": "admin", "label": "Admin-wachtwoord", "ok": bool(s.get("fgt_admin_password"))},
-        {"id": "license", "label": "Licentie", "optional": True,
-         "ok": (lic_mode == "file" and bool(s.get("license_file")))
-               or (lic_mode == "fortiflex" and bool(s.get("fortiflex_token")))},
-    ]
+    external = is_external(topo)
+    ext = topo["fortigate"].get("external") or {}
+    vlans = [seg["vlan"] for seg in topo["segments"]]
+    if external:
+        checks = [
+            {"id": "host", "label": "Proxmox-koppeling", "ok": HOST_FILE.exists()},
+            {"id": "ext", "label": "Bestaande FortiGate",
+             "ok": bool(ext.get("host") and s.get("fgt_ext_api_key") and ext.get("parent") and ext.get("wan_interface"))},
+            {"id": "vlans", "label": "VLAN's", "ok": len(set(vlans)) == len(vlans) and all(1 <= v <= 4094 for v in vlans)},
+        ]
+    else:
+        checks = [
+            {"id": "host", "label": "Proxmox-koppeling", "ok": HOST_FILE.exists()},
+            {"id": "image", "label": "FortiGate-image", "ok": bool(image_size)},
+            {"id": "wan", "label": "WAN-adres port1", "ok": wan["mode"] == "dhcp" or bool(wan.get("ip") and wan.get("gateway"))},
+            {"id": "admin", "label": "Admin-wachtwoord", "ok": bool(s.get("fgt_admin_password"))},
+            {"id": "license", "label": "Licentie", "optional": True,
+             "ok": (lic_mode == "file" and bool(s.get("license_file")))
+                   or (lic_mode == "fortiflex" and bool(s.get("fortiflex_token")))},
+        ]
+    saved_ext = external_settings()
     return {
+        "fgt_mode": "external" if external else "vm",
+        "external": {"host": saved_ext["host"], "port": saved_ext["port"], "parent": saved_ext["parent"],
+                     "trunk_bridge": saved_ext["trunk_bridge"], "trunk_default": topo["lab"]["uplink_bridge"],
+                     "wan_interface": saved_ext["wan_interface"], "wan_ip": saved_ext["wan_ip"],
+                     "global_tweaks": saved_ext["global_tweaks"], "token": s.get("fgt_ext_api_key") or ""},
+        "segments": [{"id": seg["id"], "name": seg["name"], "vlan": seg["vlan"], "subnet": seg["subnet"],
+                     "gateway": seg["gateway"]} for seg in topo["segments"]],
         "wan": wan,
         "fgt_image": image,
         "fgt_image_size": image_size,
@@ -228,6 +247,16 @@ class Settings(BaseModel):
     admin_password: Optional[str] = None
     license_mode: Optional[str] = None       # none | file | fortiflex
     fortiflex_token: Optional[str] = None
+    fgt_mode: Optional[str] = None           # vm | external (bestaande FortiGate)
+    ext_host: Optional[str] = None
+    ext_port: Optional[int] = None
+    ext_token: Optional[str] = None
+    ext_parent: Optional[str] = None
+    ext_trunk: Optional[str] = None
+    ext_wan_interface: Optional[str] = None
+    ext_wan_ip: Optional[str] = None
+    ext_vlans: Optional[dict] = None         # segment-id -> VLAN-ID
+    ext_global_tweaks: Optional[bool] = None
 
 
 @app.post("/api/settings")
@@ -284,8 +313,73 @@ def save_settings(s: Settings):
         if not re.fullmatch(r"[A-Za-z0-9]{8,64}", s.fortiflex_token.strip()):
             raise HTTPException(400, "FortiFlex-token heeft een onverwacht formaat")
         changes["fortiflex_token"] = s.fortiflex_token.strip()
+    changes.update(_external_changes(s))
     update_state(**changes)
     return public_state()
+
+
+_IFACE = re.compile(r"[A-Za-z0-9_.-]{1,15}")
+
+
+def _external_changes(s: Settings) -> dict:
+    """Instellingen voor een bestaande FortiGate, gevalideerd."""
+    changes: dict = {}
+    if s.fgt_mode:
+        if s.fgt_mode not in ("vm", "external"):
+            raise HTTPException(400, "fgt_mode moet vm of external zijn")
+        changes["fgt_mode"] = s.fgt_mode
+    ext = dict(get_state().get("fgt_external") or {})
+    if s.ext_host is not None:
+        host = s.ext_host.strip()
+        if host and not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", host):
+            raise HTTPException(400, "ongeldig management-adres van de FortiGate")
+        ext["host"] = host
+    if s.ext_port is not None:
+        if not 1 <= s.ext_port <= 65535:
+            raise HTTPException(400, "ongeldige HTTPS-poort")
+        ext["port"] = s.ext_port
+    for field, key, label in (("ext_parent", "parent", "parent-interface"), ("ext_trunk", "trunk_bridge", "trunk-bridge"),
+                              ("ext_wan_interface", "wan_interface", "WAN-interface")):
+        val = getattr(s, field)
+        if val is not None:
+            val = val.strip()
+            if val and not _IFACE.fullmatch(val):
+                raise HTTPException(400, f"ongeldige naam voor {label} (letters, cijfers, _ . -, max 15 tekens)")
+            ext[key] = val
+    if s.ext_wan_ip is not None:
+        val = s.ext_wan_ip.strip()
+        if val:
+            try:
+                if ipaddress.ip_address(val).version != 4:
+                    raise ValueError
+            except ValueError:
+                raise HTTPException(400, "extern IP voor remote access: geef een IPv4-adres zonder prefix")
+        ext["wan_ip"] = val
+    if s.ext_global_tweaks is not None:
+        ext["global_tweaks"] = bool(s.ext_global_tweaks)
+    if s.ext_vlans is not None:
+        segs = {seg["id"]: seg for seg in load_topology()["segments"]}
+        vlans = {}
+        for sid, v in s.ext_vlans.items():
+            if sid not in segs:
+                raise HTTPException(400, f"onbekend segment: {sid}")
+            try:
+                vlans[sid] = int(v)
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"VLAN voor {sid} moet een getal zijn")
+            if not 1 <= vlans[sid] <= 4094:
+                raise HTTPException(400, f"VLAN voor {sid} moet tussen 1 en 4094 liggen")
+        effective = {sid: vlans.get(sid) or ext.get("vlans", {}).get(sid) or seg.get("vlan") for sid, seg in segs.items()}
+        if len(set(effective.values())) != len(effective):
+            raise HTTPException(400, "elk segment heeft een eigen VLAN-ID nodig")
+        ext["vlans"] = vlans
+    if s.ext_token:
+        if not re.fullmatch(r"[A-Za-z0-9]{16,64}", s.ext_token.strip()):
+            raise HTTPException(400, "API-token heeft een onverwacht formaat (16-64 letters/cijfers)")
+        changes["fgt_ext_api_key"] = s.ext_token.strip()
+    if ext != (get_state().get("fgt_external") or {}):
+        changes["fgt_external"] = ext
+    return changes
 
 
 async def _stream_upload(request: Request, filename: str, allowed: tuple[str, ...]) -> str:
@@ -352,6 +446,33 @@ def _start(title, fn, *args, exclusive=True):
 @app.post("/api/deploy")
 def deploy():
     return _start("Deploy lab", deployer.deploy_all)
+
+
+@app.post("/api/fortigate/external/plan")
+def external_plan():
+    """Bestaande FortiGate: controle vooraf (alleen lezen) van Proxmox-trunk en FortiGate."""
+    topo = load_topology()
+    if not is_external(topo):
+        raise HTTPException(400, "de FortiGate staat niet op 'bestaande FortiGate'")
+    try:
+        trunk = deployer.trunk_check(topo)
+    except Exception as e:  # noqa: BLE001
+        trunk = {"ok": False, "bridge": topo["segments"][0]["bridge"], "error": f"Proxmox-host niet bereikbaar: {e}"}
+    plan = fortigate.ext_plan(topo)
+    if not trunk["ok"]:
+        plan["errors"].insert(0, trunk["error"])
+        plan["ok"] = False
+    plan["trunk"] = trunk
+    return plan
+
+
+@app.post("/api/fortigate/external/cleanup")
+def external_cleanup():
+    """Verwijder alleen wat het lab op de bestaande FortiGate aanmaakte."""
+    if not is_external(load_topology()):
+        raise HTTPException(400, "de FortiGate staat niet op 'bestaande FortiGate'")
+    return _start("Lab-config van FortiGate verwijderen",
+                  lambda log: fortigate.cleanup_external(log, load_topology()), exclusive=False)
 
 
 @app.post("/api/provision")
@@ -484,7 +605,7 @@ def access():
     nodes = {n["name"]: n for n in inventory(topo)}
     user, pw = contractor_credentials()
     try:
-        wan_ip, fgt_url = fortigate.mgmt_ip(topo), fortigate.base_url(topo)
+        wan_ip, fgt_url = fortigate.remote_ip(topo), fortigate.base_url(topo)
     except RuntimeError:
         wan_ip, fgt_url = "", ""
     jump, ews = nodes.get("dmz-jump"), nodes.get("ews")
@@ -492,7 +613,7 @@ def access():
     return {
         "totp_secret": secret, "totp_code": totp(secret),
         "totp_uri": f"otpauth://totp/{quote(f'OT Lab:{user}')}?secret={secret}&issuer={quote('OT Lab')}",
-        "fgt_url": fgt_url, "fgt_user": "admin", "fgt_password": get_state().get("fgt_admin_password") or "",
+        "fgt_url": fgt_url, "external": is_external(topo), "fgt_user": "admin", "fgt_password": get_state().get("fgt_admin_password") or "",
         "wan_ip": wan_ip, "jump_port": 2222, "user": user, "password": pw,
         "jump_ip": jump["ip"] if jump else "", "ews_ip": ews["ip"] if ews else "",
         "viewers": [{"name": n["name"], "hostname": n["hostname"], "ip": n["ip"], "role": n["role"],

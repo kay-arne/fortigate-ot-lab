@@ -53,10 +53,107 @@
       </div>
     </div>
 
-    <!-- 2. Image -->
-    <div class="card" id="card-image">
+    <!-- 2. FortiGate: variant -->
+    <div class="card" id="card-mode">
       <div class="card-head">
-        <h2><span class="step">2</span> FortiGate-VM image</h2>
+        <h2><span class="step">2</span> FortiGate: nieuwe VM of bestaande</h2>
+      </div>
+      <p class="help">Het lab kan een eigen FortiGate-VM op Proxmox uitrollen, of een <b>bestaande FortiGate</b>
+        (fysiek of een VM elders) gebruiken. In dat geval rolt de controller geen FortiGate uit: de lab-segmenten
+        worden <b>VLAN's op een trunk</b> naar die FortiGate, en de controller maakt daar de bijbehorende
+        VLAN-subinterfaces, objecten en policies aan.</p>
+      <div class="choices">
+        <label class="choice"><input type="radio" name="fgtmode" value="vm">
+          <span><b>Nieuwe FortiGate-VM</b><small>De controller rolt hem uit op Proxmox (qcow2-image, licentie, eigen bruggen).</small></span></label>
+        <label class="choice"><input type="radio" name="fgtmode" value="external">
+          <span><b>Bestaande FortiGate</b><small>Via een VLAN-trunk en een REST API-token. Er wordt niets uitgerold en geen wachtwoord gewijzigd.</small></span></label>
+      </div>
+      <div class="actions">
+        <button class="primary" data-save="mode">Opslaan</button>
+        <span class="result" data-result="mode"></span>
+      </div>
+    </div>
+
+    <!-- 3. Bestaande FortiGate -->
+    <div class="card" id="card-ext" data-ext-only hidden>
+      <div class="card-head">
+        <h2><span class="step">3</span> Bestaande FortiGate</h2>
+        <span class="badge" data-check="ext"></span>
+      </div>
+      <p class="help">Maak op de FortiGate een <b>REST API-beheerder</b> (<i>System &gt; Administrators &gt; Create New &gt;
+        REST API Admin</i>) met een profiel dat de configuratie mag lezen en schrijven, en zet het IP van deze controller
+        als <i>trusted host</i>. Plak het token hieronder. De controller wijzigt geen admin-wachtwoord, hostname of routes.
+        Hij maakt alleen VLAN-subinterfaces, objecten en policies van het lab aan en houdt bij wat dat is, zodat hij
+        het weer kan opruimen.</p>
+      <div class="grid2">
+        <div class="field">
+          <label for="e-host">Management-adres</label>
+          <input id="e-host" placeholder="bijv. 192.168.1.250">
+          <div class="hint">IP of hostnaam waarop de GUI/REST API bereikbaar is.</div>
+        </div>
+        <div class="field">
+          <label for="e-port">HTTPS-poort</label>
+          <input id="e-port" type="number" min="1" max="65535" placeholder="443">
+        </div>
+        <div class="field">
+          <label for="e-token">API-token</label>
+          <div class="secret">
+            <input id="e-token" type="password" autocomplete="off" placeholder="token van de REST API-beheerder">
+            <button class="eye" data-eye="e-token" title="Tonen/verbergen" type="button"></button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="e-parent">Parent-interface op de FortiGate</label>
+          <input id="e-parent" placeholder="bijv. port5">
+          <div class="hint">De poort die via een trunk aan de Proxmox-bridge hangt. De VLAN-subinterfaces komen hierop.</div>
+        </div>
+        <div class="field">
+          <label for="e-trunk">Trunk-bridge op Proxmox</label>
+          <input id="e-trunk" placeholder="">
+          <div class="hint">Een <b>VLAN-aware</b> bridge die de VLAN's naar de FortiGate-poort brengt. Leeg = de uplink-bridge
+            <span id="e-trunk-default"></span>. De controller controleert dit, maar past de bridge niet aan.</div>
+        </div>
+        <div class="field">
+          <label for="e-wan">WAN-interface op de FortiGate</label>
+          <input id="e-wan" placeholder="bijv. wan1">
+          <div class="hint">Interface richting internet: de patch-server mag daarover naar buiten en de VIP voor remote access hangt eraan.</div>
+        </div>
+        <div class="field">
+          <label for="e-wanip">Extern IP voor remote access (optioneel)</label>
+          <input id="e-wanip" placeholder="bijv. 192.168.1.250">
+          <div class="hint">Een IP op de WAN-interface waarop SSH :2222 naar de jump host wordt doorgezet. Leeg = geen VIP,
+            en de contractor-tests worden overgeslagen.</div>
+        </div>
+      </div>
+      <label class="segsel"><input type="checkbox" id="e-tweaks">
+        <span>Globale instellingen mogen worden aangepast: <b>OT/ICS-signatures in IPS</b>, <b>logging naar geheugen</b>
+          en <b>implicit deny loggen</b>. De oude waarden worden bij opruimen teruggezet.</span></label>
+      <p class="hint">Zonder deze instellingen kunnen de tests (die de FortiGate-logs lezen) niet slagen.</p>
+    </div>
+
+    <!-- 4. VLAN's -->
+    <div class="card" id="card-vlans" data-ext-only hidden>
+      <div class="card-head">
+        <h2><span class="step">4</span> VLAN's per segment</h2>
+        <span class="badge" data-check="vlans"></span>
+      </div>
+      <p class="help">Elk lab-segment is een VLAN op de trunk en wordt op de FortiGate een VLAN-subinterface
+        met het gateway-adres. Kies VLAN-ID's die op de trunk (en de switch) vrij zijn. De subnetten van het lab mogen
+        niet overlappen met bestaande netwerken op de FortiGate.</p>
+      <table id="vlan-table"><tr><th>Segment</th><th>VLAN-ID</th><th>Interface op de FortiGate</th><th>Subnet · gateway</th></tr></table>
+      <div class="actions">
+        <button class="primary" data-save="ext">Opslaan</button>
+        <button id="btn-ext-plan" type="button">Controleer vooraf</button>
+        <button id="btn-ext-cleanup" type="button" class="danger">Lab-config van de FortiGate verwijderen</button>
+        <span class="result" data-result="ext"></span>
+      </div>
+      <div id="ext-plan" class="plan" hidden></div>
+    </div>
+
+    <!-- 2. Image -->
+    <div class="card" id="card-image" data-vm-only>
+      <div class="card-head">
+        <h2><span class="step">3</span> FortiGate-VM image</h2>
         <span class="badge" data-check="image"></span>
       </div>
       <p class="help">Download in de Fortinet support portal (<i>Support → VM Images → FortiGate → KVM</i>) het
@@ -74,9 +171,9 @@
     </div>
 
     <!-- 3. WAN -->
-    <div class="card" id="card-wan">
+    <div class="card" id="card-wan" data-vm-only>
       <div class="card-head">
-        <h2><span class="step">3</span> FortiGate WAN (port1)</h2>
+        <h2><span class="step">4</span> FortiGate WAN (port1)</h2>
         <span class="badge" data-check="wan"></span>
       </div>
       <p class="help">port1 is de <b>enige verbinding</b> tussen je fysieke netwerk en het OT-lab. Hij hangt aan
@@ -131,9 +228,9 @@
     </div>
 
     <!-- 4. Beheer -->
-    <div class="card" id="card-admin">
+    <div class="card" id="card-admin" data-vm-only>
       <div class="card-head">
-        <h2><span class="step">4</span> FortiGate-beheer</h2>
+        <h2><span class="step">5</span> FortiGate-beheer</h2>
         <span class="badge" data-check="admin"></span>
       </div>
       <p class="help">Bij de eerste boot zet cloud-init voor <code>admin</code> het tijdelijke wachtwoord
@@ -165,9 +262,9 @@
     </div>
 
     <!-- 5. Licentie -->
-    <div class="card" id="card-license">
+    <div class="card" id="card-license" data-vm-only>
       <div class="card-head">
-        <h2><span class="step">5</span> Licentie</h2>
+        <h2><span class="step">6</span> Licentie</h2>
         <span class="badge" data-check="license"></span>
       </div>
       <p class="help">De licentie gaat via de cloud-init config drive mee bij de eerste boot. Voor de OT-signatures

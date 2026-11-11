@@ -115,6 +115,45 @@ geen harde sandbox. Kies je in de wizard voor root, dan komt de sleutel in
    test-id in de tekst een **Draai**-knop met het laatste resultaat. Het tabblad leest `docs/lab-guide.md`,
    dus dat bestand blijft de enige bron.
 
+## Een bestaande FortiGate gebruiken
+
+In plaats van een eigen FortiGate-VM kan het lab een **bestaande FortiGate** gebruiken (fysiek of een VM
+elders). Kies in de Setup-tab bij *FortiGate: nieuwe VM of bestaande* voor **Bestaande FortiGate**. De controller
+rolt dan geen FortiGate uit en wijzigt geen admin-wachtwoord, hostname of routes.
+
+**Wat je zelf regelt**
+- Een **trunk** tussen de Proxmox-host en een poort van de FortiGate, die de VLAN's van het lab doorlaat
+  (standaard 935, 930, 920, 910, 900 en 999; aanpasbaar in de UI).
+- Op Proxmox een **VLAN-aware bridge** richting die trunk (de uplink-bridge, of een eigen bridge). De controller
+  controleert dit en meldt het, maar past de bridge niet aan (Node > Network > bridge > *VLAN aware*).
+- Op de FortiGate een **REST API-beheerder** (met het controller-IP als trusted host). Het token komt in de UI.
+- De OT-licentie en de OT-pakketten (FortiGuard), zoals bij een eigen VM.
+
+**Wat de controller doet**
+- De containers krijgen een VLAN-tag op de trunk-bridge, in plaats van een eigen bridge per segment.
+- Op de FortiGate wordt per segment een **VLAN-subinterface** `ot<vlan>` aangemaakt op de opgegeven
+  parent-poort (gateway-IP, alias, device identification en Purdue-level), plus alle adressen, services, profielen
+  en de Purdue-policies. Policies krijgen **vrije ID's** en worden op naam gevonden; bestaande objecten en
+  policies worden nooit overschreven (bij een naamconflict stopt de provisioning met een melding).
+- De knop **Controleer vooraf** doet een controle zonder iets te wijzigen: bereikbaarheid, interfaces,
+  VLAN- en subnetconflicten, naamconflicten en welke globale instellingen zouden veranderen.
+- **Globale instellingen** die het lab nodig heeft worden aangepast (en bij opruimen teruggezet): OT/ICS-signatures
+  meenemen in IPS (`ips global`), logging naar geheugen en implicit deny loggen. Staat de optie uit, dan blijven ze
+  ongemoeid, maar kunnen de tests falen.
+- De knop **Lab-config van de FortiGate verwijderen** haalt alleen weg wat het lab zelf aanmaakte (de controller
+  houdt dat bij) en zet de globale instellingen terug.
+
+**Beperkingen**
+- Zonder SSH zijn de versies van de OT-pakketten niet te lezen; de test `ot-signatures` controleert alleen of de
+  FortiGate OT-applicatiesignatures kent.
+- Remote access (SSH :2222 naar de jump host) werkt alleen als je een extern IP op de WAN-interface opgeeft;
+  zonder dat worden de VIP en de contractor-tests overgeslagen.
+- Nieuwe policies komen onderaan de beleidstabel. Heeft de FortiGate daarboven een brede policy op `any`-interfaces,
+  dan kan die het lab-verkeer eerder afhandelen.
+- De subnetten van het lab (10.0.0.0/24, 10.10.0.0/24, 10.20.0.0/24, 10.30.0.0/24, 10.35.0.0/24, 10.99.0.0/24)
+  mogen niet overlappen met bestaande netwerken op de FortiGate; de controle vooraf meldt dat.
+- Dit is getest tegen een nagemaakte FortiOS-API en de Proxmox-hulpfuncties, nog niet tegen een echte FortiGate.
+
 ## Wat zit erin
 
 | Bestand | Inhoud |

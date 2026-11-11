@@ -284,3 +284,12 @@ button.run-inline:hover { background: var(--accent); color: #fff; }
   .guide-toc { position: static; }
   .guide-body { padding: 20px 16px; }
 }
+
+/* --- bestaande FortiGate ------------------------------------------------- */
+.plan { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 14px; }
+.plan-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
+.plan-head .ok { color: var(--ok-fg); } .plan-head .bad { color: var(--bad-fg); }
+.plan-list { margin: 0 0 12px; padding-left: 20px; }
+.plan-list .bad { color: var(--bad-fg); } .plan-list .warn { color: var(--warn-fg); }
+#vlan-table td { vertical-align: middle; }
+.actions { flex-wrap: wrap; }

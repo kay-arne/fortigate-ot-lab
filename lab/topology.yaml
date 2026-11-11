@@ -35,6 +35,7 @@ segments:
     purdue: "3.5"
     port: port2
     bridge: vmbr935
+    vlan: 935             # alleen voor een bestaande FortiGate (VLAN op de trunk-bridge)
     subnet: 10.35.0.0/24
     gateway: 10.35.0.1
   - id: ops
@@ -42,6 +43,7 @@ segments:
     purdue: "3"
     port: port3
     bridge: vmbr930
+    vlan: 930             # alleen voor een bestaande FortiGate (VLAN op de trunk-bridge)
     subnet: 10.30.0.0/24
     gateway: 10.30.0.1
   - id: sup
@@ -49,6 +51,7 @@ segments:
     purdue: "2"
     port: port4
     bridge: vmbr920
+    vlan: 920             # alleen voor een bestaande FortiGate (VLAN op de trunk-bridge)
     subnet: 10.20.0.0/24
     gateway: 10.20.0.1
   - id: ctl
@@ -56,6 +59,7 @@ segments:
     purdue: "1"
     port: port5
     bridge: vmbr910
+    vlan: 910             # alleen voor een bestaande FortiGate (VLAN op de trunk-bridge)
     subnet: 10.10.0.0/24
     gateway: 10.10.0.1
   - id: proc
@@ -63,6 +67,7 @@ segments:
     purdue: "0"
     port: port6
     bridge: vmbr900
+    vlan: 900             # alleen voor een bestaande FortiGate (VLAN op de trunk-bridge)
     subnet: 10.0.0.0/24
     gateway: 10.0.0.1
   - id: test
@@ -71,6 +76,7 @@ segments:
     purdue: "-"
     port: port7
     bridge: vmbr999
+    vlan: 999             # alleen voor een bestaande FortiGate (VLAN op de trunk-bridge)
     subnet: 10.99.0.0/24
     gateway: 10.99.0.1
 
