@@ -93,6 +93,16 @@ function updateSelBar() {
 
 const check = () => `<input type="checkbox" tabindex="-1" aria-label="selecteer">`;
 
+// Eén kaartstijl voor alle componenten: vakje, naam, status rechts, details eronder.
+const ST_LABEL = { running: "actief", stopped: "gestopt", absent: "ontbreekt", unknown: "onbekend" };
+const stTag = (st, label) =>
+  `<span class="tag ${st === "running" ? "ok" : st === "absent" || st === "unknown" ? "absent" : "warn"}">${esc(label || ST_LABEL[st] || st)}</span>`;
+function compCard({ id, name, status, label, subs = [], ok = false, title = "" }) {
+  const cb = id ? check() : `<span class="cb-spacer"></span>`;
+  const lines = subs.filter(Boolean).map((x) => `<span>${x}</span>`).join("");
+  return `<div class="comp${ok ? " comp-ok" : ""}"${id ? ` data-comp="${esc(id)}"` : ""}${title ? ` title="${esc(title)}"` : ""}>${cb}<span class="comp-name">${esc(name)}</span>${stTag(status, label)}<span class="comp-sub">${lines}</span></div>`;
+}
+
 function renderLab(lab) {
   if (!lab) { $("#topology").innerHTML = ""; return; }
   const bySeg = {};
@@ -102,31 +112,43 @@ function renderLab(lab) {
   const sg = f.signatures;
   const t = lab.template || { vmid: "-", status: "unknown" };
   const bridges = lab.segments.filter((s) => s.present).length;
+  const apiState = f.api_ok ? "running" : f.api ? "stopped" : "absent";
+
+  // in uitrolvolgorde: netwerk, FortiGate, template, policies; de signatures zijn alleen een status
+  const infra = [
+    compCard({ id: "network", name: "Netwerk", status: bridges === lab.segments.length ? "running" : bridges ? "stopped" : "absent",
+      label: bridges === lab.segments.length ? "aanwezig" : bridges ? "deels" : "ontbreekt",
+      subs: [f.external
+        ? `trunk-bridge ${esc((lab.segments[0] || {}).bridge || "")} · ${lab.segments.length} VLAN's`
+        : `${bridges}/${lab.segments.length} Purdue-bridges`] }),
+    compCard({ id: "fortigate", name: f.external ? "Bestaande FortiGate" : "FortiGate-VM", ok: f.api_ok,
+      status: f.external ? apiState : f.status, label: f.external ? (f.api_ok ? "bereikbaar" : "geen API") : undefined,
+      subs: [esc(f.name || ""), f.external ? "REST API-token" : `port1 ${esc(f.wan.ip || f.wan.mode)}${f.vmid ? ` · VMID ${f.vmid}` : ""}`,
+             f.version ? esc(f.version) : ""] }),
+    compCard({ id: "template", name: "LXC-template", status: t.status === "stopped" ? "running" : t.status,
+      label: t.status === "absent" ? "niet gebouwd" : undefined,
+      subs: [`VMID ${t.vmid}`, t.status === "absent" ? "" : "basis voor alle containers"] }),
+    compCard({ id: "policies", name: "FortiGate-policies", status: apiState,
+      label: f.api_ok ? "gekoppeld" : f.api ? "geen antwoord" : "niet gekoppeld", title: f.api_error || "",
+      subs: ["adressen, conduits, OT-profielen"] }),
+    compCard({ name: "OT-signatures", ok: !!(sg && sg.state === "ok"), title: sg ? sg.detail : "",
+      status: sg ? (sg.state === "ok" ? "running" : sg.state === "missing" ? "stopped" : "absent") : "absent",
+      label: sg ? (sg.state === "ok" ? "geladen" : sg.state === "missing" ? "ontbreken" : "onbekend") : "niet gecontroleerd",
+      subs: ["IoT/OT Detect, Patch, Threat, MAC-database"] }),
+  ];
+
   let html = `<div class="purdue">
-    <div class="zone" style="border-left-color:#666"><div class="meta"><b>L4/L5 Enterprise</b><div class="lvl">fysiek netwerk (vmbr0)</div></div>
-      <div class="nodes"><div class="node"><div class="n">Jouw IT-netwerk</div><div class="ip">enige toegang loopt via de FortiGate</div></div></div></div>
-    <div class="infra">
-      <div class="comp${f.api_ok ? " comp-ok" : ""}" data-comp="fortigate">${check()}<span class="dot ${f.external ? (f.api_ok ? "running" : "stopped") : f.status}"></span>
-        <div><b>${esc(f.name || "FortiGate")}${f.external ? "" : ` · ${f.vmid}`}</b><div class="ip">${f.external
-          ? `bestaande FortiGate · REST API ${f.api_ok ? "antwoordt" : f.api ? "antwoordt niet" : "geen token"}`
-          : `port1 ${esc(f.wan.ip || f.wan.mode)} · status: ${esc(f.status)}`}${f.version ? ` · ${esc(f.version)}` : ""}</div></div></div>
-      <div class="comp" data-comp="policies">${check()}<span class="dot ${f.api_ok ? "running" : f.api ? "stopped" : "absent"}"></span>
-        <div><b>FortiGate-policies</b><div class="ip" title="${esc(f.api_error || "")}">REST API ${f.api_ok ? "antwoordt" : f.api ? "antwoordt niet" : "nog niet gekoppeld"} · adressen, conduits, OT-profielen</div></div></div>
-      <div class="comp${sg && sg.state === "ok" ? " comp-ok" : ""}" style="cursor:default">${check().replace("<input", '<input style="visibility:hidden"')}<span class="dot ${sg ? (sg.state === "ok" ? "running" : sg.state === "missing" ? "stopped" : "absent") : "absent"}"></span>
-        <div><b>OT-signatures</b><div class="ip" title="${esc(sg ? sg.detail : "")}">${sg ? (sg.state === "ok" ? "geladen" : sg.state === "missing" ? "ONTBREKEN: het lab werkt zonder niet" : "niet te controleren") : "nog niet gecontroleerd"} · IoT/OT Detect, Patch, Threat, MAC-database</div></div></div>
-      <div class="comp" data-comp="network">${check()}<span class="dot ${bridges === lab.segments.length ? "running" : bridges ? "stopped" : "absent"}"></span>
-        <div><b>Netwerk</b><div class="ip">${f.external
-          ? `trunk-bridge ${esc((lab.segments[0] || {}).bridge || "")} ${bridges ? "aanwezig" : "ontbreekt"} · ${lab.segments.length} VLAN's`
-          : `${bridges}/${lab.segments.length} Purdue-bridges aanwezig`}</div></div></div>
-      <div class="comp" data-comp="template">${check()}<span class="dot ${t.status === "stopped" ? "running" : t.status}"></span>
-        <div><b>LXC-template · ${t.vmid}</b><div class="ip">${t.status === "absent" ? "nog niet gebouwd" : "basis voor alle containers"}</div></div></div>
-    </div>`;
+    <div class="zone ext"><div class="meta"><label class="segsel"><b>L4/L5 Enterprise</b></label>
+      <div class="seg-net">fysiek netwerk</div></div>
+      <div class="nodes"><div class="node"><div class="n">Jouw IT-netwerk</div><div class="ip">de enige toegang loopt via de FortiGate</div></div></div></div>
+    <div class="infra">${infra.join("")}</div>`;
   lab.segments.forEach((s) => {
-    html += `<div class="zone"><div class="meta"><label class="segsel"><input type="checkbox" data-seg-select="${esc(s.id)}"> <b>${esc(s.name)}</b></label>
-      <div class="lvl">${esc(s.port)} · ${esc(s.bridge)}${s.tag ? ` VLAN ${s.tag}` : ""} ${s.present ? "" : "(ontbreekt)"} · ${esc(s.subnet)}</div></div><div class="nodes">`;
+    html += `<div class="zone"><div class="meta"><label class="segsel"><input type="checkbox" data-seg-select="${esc(s.id)}"><b>${esc(s.name)}</b></label>
+      <div class="seg-net">${esc(s.subnet)}</div>
+      <div class="seg-if">${esc(s.port)} · ${esc(s.bridge)}${s.tag ? ` · VLAN ${s.tag}` : ""}${s.present ? "" : ` <span class="tag absent">geen bridge</span>`}</div></div><div class="nodes">`;
     (bySeg[s.id] || []).forEach((n) => {
-      html += `<div class="node ${n.kind}" data-comp="node:${esc(n.name)}" data-seg="${esc(s.id)}">
-        <div class="n">${check()}<span class="dot ${n.status}"></span>${esc(n.hostname || n.name)}</div>
+      html += `<div class="node ${n.kind}" data-comp="node:${esc(n.name)}" data-seg="${esc(s.id)}" title="${esc(n.status)}">
+        <div class="n">${check()}<span class="dot ${n.status}"></span><span class="nm">${esc(n.hostname || n.name)}</span></div>
         <div class="ip">${esc(n.ip)} · ${esc(n.role)} · ${n.vmid}</div></div>`;
     });
     html += `</div></div>`;

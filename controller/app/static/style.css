@@ -324,3 +324,27 @@ button.pill.version { display: inline-flex; align-items: center; gap: 6px; }
   .head-in nav { flex-wrap: nowrap; }
   .head-in .brand, .head-in nav, .head-in .pill, .head-in .logout, .head-in .theme-toggle { flex: none; }
 }
+
+/* --- Lab-tab: opgeruimde kaarten en segmenten ------------------------------ */
+.dot { flex: none; }
+.infra { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; align-items: stretch; }
+.comp { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; align-content: start; gap: 4px 10px; padding: 12px 14px; }
+.comp input[type=checkbox], .comp .cb-spacer { grid-column: 1; margin: 0; width: 14px; height: 14px; }
+.comp .comp-name { grid-column: 2; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.comp .tag { grid-column: 3; margin: 0; justify-self: end; white-space: nowrap; }
+.comp .comp-sub { grid-column: 2 / -1; display: flex; flex-direction: column; gap: 1px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.comp .comp-sub span { overflow-wrap: anywhere; }
+.zone { grid-template-columns: 230px minmax(0, 1fr); }
+.zone .meta { display: flex; flex-direction: column; gap: 3px; padding: 12px 14px; }
+.zone .meta .segsel { margin: 0 0 2px; }
+.seg-net { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.seg-if { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.seg-if .tag { margin: 0; }
+.zone .nodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; padding: 12px; align-content: start; }
+.node { min-width: 0; padding: 8px 10px; }
+.node .n { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.node .n input[type=checkbox] { margin: 0; flex: none; }
+.node .n .dot { margin: 0; }
+.node .nm { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.node .ip { margin-top: 2px; padding-left: 0; }
+@media (max-width: 900px) { .zone { grid-template-columns: 1fr; } .zone .meta { border-right: 0; border-bottom: 1px solid var(--line); } }
