@@ -29,7 +29,6 @@ let activeJobId = null;
 function followJob(job, onDone) {
   activeJobId = job.id;
   document.body.classList.add("logopen");
-  $("#job-pill").hidden = true;
   $("#log-stop").hidden = false;
   $("#log-title").textContent = job.title;
   $("#log-body").textContent = "";
@@ -60,7 +59,12 @@ $("#log-stop").onclick = async () => {
   if (!activeJobId || !confirm("De lopende taak stoppen?")) return;
   try { await post(`/api/jobs/${activeJobId}/stop`); } catch (e) { alert(e.message); }
 };
-$("#job-pill").onclick = () => { if ($("#job-pill")._job) followJob($("#job-pill")._job); };
+// Joblog-knop in de kop: de lopende taak, anders de laatste; het hele log wordt opnieuw getoond.
+let recentJobs = [];
+$("#btn-joblog").onclick = () => {
+  const job = recentJobs.find((j) => j.status === "running") || recentJobs[0];
+  if (job) followJob(job);
+};
 
 async function action(path, data, onDone) {
   try { followJob(await post(path, data), onDone); } catch (e) { alert(e.message); }
@@ -187,6 +191,14 @@ function fillSettings(s) {
   $("#i-token").value = s.fortiflex_token || "";
   const lic = $(`input[name=lic][value=${s.license_mode || "none"}]`);
   if (lic) lic.checked = true;
+  const ff = s.fortiflex_api || {};
+  $("#ff-user").value = ff.username || "";
+  $("#ff-pass").value = "";
+  $("#ff-pass-hint").textContent = ff.password_set ? "Opgeslagen; laat leeg om het ongewijzigd te laten." : "";
+  $("#ff-program").value = ff.program_serial || "";
+  $("#ff-account").value = ff.account_id || "";
+  $("#ff-cfgname").textContent = `${(s.name_prefix || "otlab")}-ot-fgt`;
+  flexReady = !!(ff.username && ff.password_set);
   toggleWan();
   toggleLic();
   fillExternal(s);
@@ -264,8 +276,58 @@ function toggleLic() {
   const v = ($("input[name=lic]:checked") || {}).value;
   $("#lic-file").hidden = v !== "file";
   $("#lic-flex").hidden = v !== "fortiflex";
+  $("#lic-api").hidden = v !== "fortiflex_api";
+  if (v === "fortiflex_api" && flexReady) loadFlex();
 }
 $$("input[name=lic]").forEach((r) => r.addEventListener("change", toggleLic));
+
+// --- FortiFlex via API -------------------------------------------------------
+let flexReady = false;   // API-gegevens opgeslagen: pas dan de entitlement uit FortiFlex lezen
+const FF_ICON = {
+  create: '<path d="M12 5v14M5 12h14"/>',
+  token: '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  reactivate: '<path d="M7 4l13 8-13 8z"/>',
+  unlink: '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/><path d="M3 3l18 18"/>',
+};
+const FF_TIP = { create: "Entitlement aanmaken", token: "Nieuwe token genereren", stop: "Stoppen (geen verbruik meer)",
+                 reactivate: "Reactiveren", unlink: "Ontkoppelen van de controller" };
+const ffBtn = (dev, a, cls = "") => `<button type="button" class="icon-btn ${cls}" data-ffa="${a}" data-ffd="${dev}" data-tip="${FF_TIP[a]}" aria-label="${FF_TIP[a]}"><svg viewBox="0 0 24 24">${FF_ICON[a]}</svg></button>`;
+const ffTag = (s) => !s ? '<span class="tag absent">geen</span>'
+  : `<span class="tag ${s === "ACTIVE" ? "ok" : s === "PENDING" ? "" : "warn"}">${esc(s)}</span>`;
+
+async function ffCall(url, method = "POST", body) {
+  const out = $("#ff-out");
+  out.hidden = false;
+  out.textContent = "bezig...";
+  try {
+    const r = await (method === "GET" ? api(url) : post(url, body));
+    out.textContent = r.log ? r.log.join("\n") || "klaar" : JSON.stringify(r, null, 2);
+  } catch (e) { out.textContent = "Fout: " + e.message; }
+  loadFlex();
+}
+async function loadFlex() {
+  const el = $("#ff-table");
+  if (!el || $("#lic-api").hidden) return;
+  if (!el.children.length) el.innerHTML = '<span class="muted">laden…</span>';
+  let rows;
+  try { rows = await api("/api/fortiflex/entitlements"); }
+  catch (e) { el.innerHTML = `<span class="warn">${esc(e.message)}</span>`; return; }
+  el.innerHTML = `<table class="kv fftable"><tr><th>Apparaat</th><th>Entitlement</th><th>Status</th><th>Token</th><th></th></tr>${rows.map((r) => `<tr>
+    <td>${esc(r.label)}</td><td class="mono">${esc(r.serial || "-")}</td><td>${ffTag(r.status)}</td>
+    <td>${r.token_status === "USED" ? "gebruikt" : r.token_status === "NOTUSED" ? "ongebruikt" : "-"}</td>
+    <td><div class="ffbtns">${!r.serial ? ffBtn(r.device, "create", "primary")
+      : ffBtn(r.device, "token") + (r.status === "STOPPED" ? ffBtn(r.device, "reactivate") : ffBtn(r.device, "stop")) + ffBtn(r.device, "unlink", "ghost")}</div></td></tr>`).join("")}</table>`;
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-ffa]");
+  if (!b) return;
+  if (b.dataset.ffa === "unlink" && !confirm("Koppeling met deze entitlement verwijderen? (De entitlement zelf blijft in FortiFlex bestaan; stop hem eerst.)")) return;
+  ffCall("/api/fortiflex/entitlement", "POST", { action: b.dataset.ffa });
+});
+$("#ff-test").onclick = () => ffCall("/api/fortiflex/test");
+$("#ff-configs").onclick = () => ffCall("/api/fortiflex/configs");
+$("#ff-refresh").onclick = () => loadFlex();
 
 // oogje: wachtwoord/token tonen of verbergen
 $$("[data-eye]").forEach((b) => b.addEventListener("click", () => {
@@ -308,8 +370,15 @@ const savePayload = {
     ext_vlans: Object.fromEntries([...$$(".vlan-in")].map((i) => [i.dataset.vlanseg, Number(i.value)])),
   }),
   admin: () => ({ admin_password: $("#i-adminpw").value }),
-  license: () => ({ license_mode: ($("input[name=lic]:checked") || {}).value || "none",
-                    fortiflex_token: $("#i-token").value.trim() || null }),
+  license: () => {
+    const mode = ($("input[name=lic]:checked") || {}).value || "none";
+    const body = { license_mode: mode, fortiflex_token: $("#i-token").value.trim() || null };
+    if (mode === "fortiflex_api") {
+      body.fortiflex_api = { username: $("#ff-user").value, password: $("#ff-pass").value,
+                             program_serial: $("#ff-program").value, account_id: $("#ff-account").value };
+    }
+    return body;
+  },
 };
 $$("[data-save]").forEach((b) => b.addEventListener("click", async () => {
   const key = b.dataset.save;
@@ -506,12 +575,12 @@ let currentCommit = null;
 async function loadVersion() {
   const v = await api("/api/version");
   if (!v.git) {
-    $("#version-pill").textContent = "geen git";
+    $("#version-text").textContent = "geen git";
     $("#upd-current").textContent = "Geen git-checkout gevonden; bijwerken via de UI is niet mogelijk.";
     return v;
   }
   currentCommit = v.commit;
-  $("#version-pill").textContent = v.commit;
+  $("#version-text").textContent = v.commit;
   $("#upd-current").innerHTML = `<span class="mono">${esc(v.commit)}</span> ${esc(v.subject)} <span class="hint">(${esc(fmtDate(v.date))})</span>`;
   $("#upd-branch").textContent = v.branch;
   $("#otsim-banner").hidden = !v.otsim_outdated;
@@ -595,20 +664,14 @@ async function refresh() {
     const st = await api("/api/status");
     renderChecks(st.settings.checks);
     renderLab(st.lab);
+    // Alleen tonen als de host niet bereikbaar is.
     const hs = $("#hoststatus");
-    hs.textContent = st.host_error ? "Proxmox: geen verbinding" : "Proxmox: verbonden";
-    hs.className = "pill " + (st.host_error ? "bad" : "ok");
+    hs.hidden = !st.host_error;
     hs.title = st.host_error || "";
-    // Lopende taak terwijl het logvenster dicht is -> pill om te heropenen.
-    const run = (st.jobs || []).find((j) => j.status === "running");
-    const pill = $("#job-pill");
-    if (run && !document.body.classList.contains("logopen")) {
-      pill._job = { id: run.id, title: run.title };
-      pill.textContent = `⟳ ${run.title} loopt — toon log`;
-      pill.hidden = false;
-    } else {
-      pill.hidden = true;
-    }
+    // Joblog-knop: zichtbaar zodra er een taak is geweest, met een pulserende stip tijdens een lopende taak.
+    recentJobs = st.jobs || [];
+    $("#btn-joblog").hidden = !recentJobs.length;
+    $("#job-dot").hidden = !recentJobs.some((j) => j.status === "running");
   } catch (e) { console.error(e); }
 }
 loadSettings();

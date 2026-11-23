@@ -17,13 +17,13 @@
     <button data-tab="setup" class="active">1. Setup</button>
     <button data-tab="lab">2. Lab</button>
     <button data-tab="tests">3. Testcenter</button>
-    <button data-tab="guide">Lab guide</button>
-    <button data-tab="updates">Updates <span id="update-dot" class="dot-new" hidden></span></button>
+    <button data-tab="guide">4. Lab guide</button>
   </nav>
-  <span id="hoststatus" class="pill">…</span>
-  <button id="version-pill" class="pill version" data-goto="updates" title="Versie van de controller">…</button>
-  <form method="post" action="/logout" class="logout"><button type="submit" class="ghost">Uitloggen</button></form>
+  <span id="hoststatus" class="pill bad" hidden>host niet bereikbaar</span>
+  <button id="btn-joblog" class="pill joblog" title="Joblog openen" hidden>Joblog<span id="job-dot" class="dot-run" hidden></span></button>
+  <button id="version-pill" class="pill version" data-goto="updates" title="Versie van de controller; klik om bij te werken"><span id="version-text">…</span><span id="update-dot" class="dot-new" title="Update beschikbaar" hidden></span></button>
   <button type="button" class="theme-toggle ghost" data-theme-toggle title="Wissel tussen licht en donker" aria-label="Wissel tussen licht en donker"><svg class="moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg><svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></button>
+  <form method="post" action="/logout" class="logout"><button type="submit" class="theme-toggle ghost" title="Uitloggen" aria-label="Uitloggen"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></button></form>
 </div>
 </header>
 
@@ -270,12 +270,52 @@
       <p class="help">De licentie gaat via de cloud-init config drive mee bij de eerste boot. Voor de OT-signatures
         (industrial database) in application control en IPS is de <b>OT Security Service</b> nodig.</p>
       <div class="choices">
+        <label class="choice"><input type="radio" name="lic" value="fortiflex_api">
+          <span><b>FortiFlex via API</b><small>De controller maakt, reactiveert en stopt de entitlement zelf: bij elke uitrol een verse token, zonder handwerk.</small></span></label>
         <label class="choice"><input type="radio" name="lic" value="file">
           <span><b>Licentiebestand</b><small>Een <code>.lic</code>-bestand uit FortiCare (geregistreerd VM-serienummer).</small></span></label>
         <label class="choice"><input type="radio" name="lic" value="fortiflex">
-          <span><b>FortiFlex-token</b><small>Token uit het FortiFlex-portal; de FortiGate activeert zichzelf online.</small></span></label>
+          <span><b>FortiFlex-token</b><small>Token uit het FortiFlex-portal (handmatig); de FortiGate activeert zichzelf online.</small></span></label>
         <label class="choice"><input type="radio" name="lic" value="none">
           <span><b>Geen / later</b><small>Evaluatiemodus: maar 3 interfaces (het lab heeft er 7 nodig), geen FortiGuard en geen OT-signatures.</small></span></label>
+      </div>
+      <div id="lic-api" hidden>
+        <p class="hint">Maak in de FortiCloud IAM-portal een <b>API-gebruiker</b> met rechten op FortiFlex en vul die hieronder in.
+          De controller gebruikt de configuratie <code id="ff-cfgname">&lt;prefix&gt;-ot-fgt</code> (FortiGate-VM, service-pakket en
+          OT Security Service uit <code>topology.yaml</code>) en maakt die aan als hij nog niet bestaat.</p>
+        <div class="grid2">
+          <div class="field">
+            <label for="ff-user">API-gebruiker</label>
+            <input id="ff-user" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="ff-pass">API-wachtwoord</label>
+            <div class="secret">
+              <input id="ff-pass" type="password" autocomplete="new-password">
+              <button class="eye" data-eye="ff-pass" title="Tonen/verbergen" type="button"></button>
+            </div>
+            <div class="hint" id="ff-pass-hint"></div>
+          </div>
+          <div class="field">
+            <label for="ff-program">Programma-serienummer</label>
+            <input id="ff-program" placeholder="leeg = eerste programma">
+          </div>
+          <div class="field">
+            <label for="ff-account">Account-ID</label>
+            <input id="ff-account" placeholder="optioneel">
+          </div>
+        </div>
+        <div class="actions ff-actions">
+          <button id="ff-test" type="button">Verbinding testen</button>
+          <button id="ff-configs" type="button">Configuratie aanmaken</button>
+          <button id="ff-refresh" type="button">Vernieuwen</button>
+        </div>
+        <h3 class="subhead">Entitlement van dit lab</h3>
+        <p class="hint">Bij elke (her)uitrol van de FortiGate haalt de controller zelf een nieuwe token uit de entitlement.
+          FortiFlex kan VM-entitlements niet verwijderen: <b>Stoppen</b> beëindigt het verbruik (ook bij het verwijderen van
+          de FortiGate), <b>Ontkoppelen</b> haalt de koppeling uit de controller. Sla de gegevens eerst op.</p>
+        <div id="ff-table"></div>
+        <pre id="ff-out" class="logbox" hidden></pre>
       </div>
       <div id="lic-file" class="field">
         <label for="f-license">Licentiebestand</label>
@@ -414,7 +454,6 @@
     <span class="logbtns"><button id="log-stop" class="ghost" hidden>Stop</button><button id="log-close" title="Venster sluiten (de taak loopt door)">×</button></span></div>
   <pre id="log-body"></pre>
 </aside>
-<button id="job-pill" hidden></button>
 
 <div id="viewer" class="modal" hidden>
   <div class="modal-box">

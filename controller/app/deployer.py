@@ -163,7 +163,7 @@ def deploy_fortigate(log, topo):
         h.put(UPLOADS / image, remote_img, callback=progress)
 
     log("cloud-init config drive bouwen (bootstrap + licentie)")
-    iso_local = build_config_iso(topo, state)
+    iso_local = build_config_iso(topo, state, log)
     h.put(iso_local, f"{h.workdir}/{ISO_NAME}")
     h.run(["install", "-m", "0644", f"{h.workdir}/{ISO_NAME}", f"/var/lib/vz/template/iso/{ISO_NAME}"])
 
@@ -224,7 +224,7 @@ def create_fortigate_vm(log, topo, storage, remote_img):
     log(f"boot order: {boot}")
 
 
-def build_config_iso(topo, state) -> Path:
+def build_config_iso(topo, state, log=None) -> Path:
     """Config drive zoals in de Fortinet-handleiding (cloud-init met FortiFlex):
     één MIME-multipart user_data in openstack/latest met de configuratie en
     (indien gekozen) de licentie als bijlage; openstack/content blijft leeg."""
@@ -239,6 +239,11 @@ def build_config_iso(topo, state) -> Path:
         parts.append(("license.txt", (UPLOADS / state["license_file"]).read_text().strip() + "\n"))
     elif lic_mode == "fortiflex" and state.get("fortiflex_token"):
         parts.append(("license.txt", f"LICENSE-TOKEN:{state['fortiflex_token']}\n"))
+    elif lic_mode == "fortiflex_api":
+        # De controller regelt de entitlement zelf en haalt een verse token op.
+        from . import fortiflex
+        token = fortiflex.acquire(log or (lambda m: None), topo)
+        parts.append(("license.txt", f"LICENSE-TOKEN:{token}\n"))
     (work / "openstack" / "latest" / "user_data").write_text(mime_multipart(parts))
 
     iso = out / ISO_NAME
@@ -667,6 +672,13 @@ def component_ids(topo) -> list[str]:
             + ["policies"])
 
 
+def _release_license(log):
+    """FortiFlex via API: entitlement stoppen als de FortiGate weg is (geen punten meer verbruiken)."""
+    from . import fortiflex
+    if fortiflex.is_api_mode():
+        fortiflex.release_all(log)
+
+
 def _destroy_vmid(log, h, vmid, label):
     kind = h.exists(vmid)
     if not kind:
@@ -692,6 +704,7 @@ def destroy_selected(log, items):
         else:
             _destroy_vmid(log, h, topo["fortigate"]["vmid"], vm_name(topo, topo["fortigate"]["name"]))
             update_state(fgt_api_key=None, fgt_provisioned=False, fgt_password_applied=False)
+            _release_license(log)
     if "template" in items:
         try:
             _destroy_vmid(log, h, template_vmid(topo), vm_name(topo, "template"))
@@ -756,3 +769,4 @@ def destroy_all(log, remove_template=False, remove_net=False):
         update_state(deployed=False)  # het API-token van de bestaande FortiGate blijft staan
     else:
         update_state(deployed=False, fgt_api_key=None, fgt_password_applied=False)
+        _release_license(log)

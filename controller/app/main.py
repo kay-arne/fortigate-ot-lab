@@ -116,10 +116,13 @@ def public_state() -> dict:
             {"id": "admin", "label": "Admin-wachtwoord", "ok": bool(s.get("fgt_admin_password"))},
             {"id": "license", "label": "Licentie", "optional": True,
              "ok": (lic_mode == "file" and bool(s.get("license_file")))
-                   or (lic_mode == "fortiflex" and bool(s.get("fortiflex_token")))},
+                   or (lic_mode == "fortiflex" and bool(s.get("fortiflex_token")))
+                   or (lic_mode == "fortiflex_api" and bool((s.get("fortiflex_api") or {}).get("username"))
+                       and bool((s.get("fortiflex_api") or {}).get("password")))},
         ]
     saved_ext = external_settings()
     return {
+        "name_prefix": topo["lab"]["name_prefix"],
         "fgt_mode": "external" if external else "vm",
         "external": {"host": saved_ext["host"], "port": saved_ext["port"], "parent": saved_ext["parent"],
                      "trunk_bridge": saved_ext["trunk_bridge"], "trunk_default": topo["lab"]["uplink_bridge"],
@@ -133,6 +136,10 @@ def public_state() -> dict:
         "license_mode": lic_mode,
         "license_file": s.get("license_file"),
         "fortiflex_token": s.get("fortiflex_token") or "",
+        "fortiflex_api": {"username": (s.get("fortiflex_api") or {}).get("username", ""),
+                          "password_set": bool((s.get("fortiflex_api") or {}).get("password")),
+                          "program_serial": (s.get("fortiflex_api") or {}).get("program_serial", ""),
+                          "account_id": (s.get("fortiflex_api") or {}).get("account_id", "")},
         "fgt_admin_password": s.get("fgt_admin_password") or "",
         "fgt_api_key": s.get("fgt_api_key") or "",
         "fgt_mgmt_ip": s.get("fgt_mgmt_ip") or "",
@@ -245,8 +252,9 @@ class Settings(BaseModel):
     wan_dns2: Optional[str] = None
     fgt_mgmt_ip: Optional[str] = None
     admin_password: Optional[str] = None
-    license_mode: Optional[str] = None       # none | file | fortiflex
+    license_mode: Optional[str] = None       # none | file | fortiflex | fortiflex_api
     fortiflex_token: Optional[str] = None
+    fortiflex_api: Optional[dict[str, str]] = None   # username, password, program_serial, account_id
     fgt_mode: Optional[str] = None           # vm | external (bestaande FortiGate)
     ext_host: Optional[str] = None
     ext_port: Optional[int] = None
@@ -306,13 +314,22 @@ def save_settings(s: Settings):
             raise HTTPException(400, "admin-wachtwoord: minimaal 8 tekens, geen aanhalingstekens")
         changes["fgt_admin_password"] = s.admin_password
     if s.license_mode:
-        if s.license_mode not in ("none", "file", "fortiflex"):
+        if s.license_mode not in ("none", "file", "fortiflex", "fortiflex_api"):
             raise HTTPException(400, "ongeldige licentiemodus")
         changes["license_mode"] = s.license_mode
     if s.fortiflex_token:
         if not re.fullmatch(r"[A-Za-z0-9]{8,64}", s.fortiflex_token.strip()):
             raise HTTPException(400, "FortiFlex-token heeft een onverwacht formaat")
         changes["fortiflex_token"] = s.fortiflex_token.strip()
+    if s.fortiflex_api is not None:
+        cur = dict(get_state().get("fortiflex_api") or {})
+        for k in ("username", "password", "program_serial", "account_id"):
+            v = (s.fortiflex_api.get(k) or "").strip()
+            if v or k in ("program_serial", "account_id"):      # leeg wachtwoord = ongewijzigd laten
+                cur[k] = v
+        if cur.get("account_id") and not cur["account_id"].isdigit():
+            raise HTTPException(400, "Account-ID moet een getal zijn (of leeg)")
+        changes["fortiflex_api"] = cur
     changes.update(_external_changes(s))
     update_state(**changes)
     return public_state()
@@ -446,6 +463,72 @@ def _start(title, fn, *args, exclusive=True):
 @app.post("/api/deploy")
 def deploy():
     return _start("Deploy lab", deployer.deploy_all)
+
+
+# --- FortiFlex via API ----------------------------------------------------------------
+class FlexAction(BaseModel):
+    action: str            # activate | create | token | stop | reactivate | unlink
+
+
+def _flex_error(e: Exception):
+    raise HTTPException(400, str(e)) from None
+
+
+@app.post("/api/fortiflex/test")
+def fortiflex_test():
+    from . import fortiflex
+    try:
+        return fortiflex.test(load_topology())
+    except Exception as e:  # noqa: BLE001
+        _flex_error(e)
+
+
+@app.post("/api/fortiflex/configs")
+def fortiflex_configs():
+    """Maak de lab-configuratie (FortiGate-VM met OT-service) aan als die nog niet bestaat."""
+    from . import fortiflex
+    topo, lines = load_topology(), []
+    try:
+        for kind in fortiflex.PRODUCTS:
+            lines.append(f"{fortiflex.config_name(topo, kind)}: id {fortiflex.ensure_config(lines.append, topo, kind)}")
+    except Exception as e:  # noqa: BLE001
+        _flex_error(e)
+    return {"log": lines}
+
+
+@app.get("/api/fortiflex/entitlements")
+def fortiflex_entitlements():
+    from . import fortiflex
+    try:
+        return fortiflex.entitlements(load_topology())
+    except Exception as e:  # noqa: BLE001
+        _flex_error(e)
+
+
+@app.post("/api/fortiflex/entitlement")
+def fortiflex_entitlement(a: FlexAction):
+    from . import fortiflex
+    topo, lines = load_topology(), []
+    try:
+        if a.action == "activate":
+            fortiflex.activate(lines.append, topo)
+        elif a.action == "create":
+            fortiflex.create(lines.append, topo)
+        elif a.action == "token":
+            fortiflex.new_token(lines.append)
+        elif a.action == "stop":
+            fortiflex.release(lines.append)
+        elif a.action == "reactivate":
+            fortiflex.reactivate(lines.append)
+        elif a.action == "unlink":
+            fortiflex.unlink(lines.append)
+        else:
+            raise HTTPException(400, "onbekende actie")
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        _flex_error(e)
+    return {"log": lines}
 
 
 @app.post("/api/fortigate/external/plan")

@@ -29,6 +29,13 @@ fortigate:
     gateway: ""
   admin_https_port: 443
 
+# FortiFlex (licentiemodus 'FortiFlex via API'): parameters van de FortiGate-VM-configuratie
+# <prefix>-ot-fgt. Ze gelden alleen bij het aanmaken; pas een bestaande configuratie in het
+# FortiFlex-portaal aan. cpu volgt fortigate.cores. service: FC | UTP | ENT | ATP.
+# FGTISSS = FortiGuard OT/Industrial Security Service, nodig voor de OT-signatures.
+fortiflex:
+  fgt: {service: UTP, fortiGuardServices: [FGTISSS]}
+
 segments:
   - id: dmz
     name: "L3.5 OT-DMZ"

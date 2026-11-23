@@ -92,8 +92,13 @@ geen harde sandbox. Kies je in de wizard voor root, dan komt de sleutel in
 
 ## Gebruik
 
-1. **Setup**: upload `FGT_VM64_KVM-v7.6.x...fortios.qcow2`, kies de licentie (`.lic`-bestand óf
-   FortiFlex-token), stel het WAN-IP van port1 en een admin-wachtwoord in.
+De web UI heeft vier tabs: **1. Setup**, **2. Lab**, **3. Testcenter** en **4. Lab guide**. Rechtsboven staan de
+**Joblog**-knop (heropent het logvenster van de lopende of laatste taak; een pulserende stip betekent dat er een
+taak loopt), de versie van de controller (een klik opent *Updates*; een blauwe stip betekent dat er een update
+is), de licht/donker-schakelaar en uitloggen.
+
+1. **Setup**: upload `FGT_VM64_KVM-v7.6.x...fortios.qcow2`, kies de licentie (FortiFlex via API, `.lic`-bestand
+   of FortiFlex-token), stel het WAN-IP van port1 en een admin-wachtwoord in.
 2. **Lab → Deploy lab**. De controller:
    - maakt de Purdue-bridges (`vmbr900`–`vmbr999`);
    - maakt de FortiGate-VM (`<prefix>-fgt`) volgens de Fortinet Proxmox-handleiding, met een cloud-init config drive (interfaces, DNS, logging, licentie en het tijdelijke admin-wachtwoord `Deployment_Pass2026`, dat bij de provisioning via de REST API wordt vervangen door jouw wachtwoord);
@@ -197,6 +202,17 @@ met een echte FortiGate-VM gedraaid**. Controleer bij de eerste uitrol vooral:
   dezelfde manier als bijlage mee; dat staat niet letterlijk in de handleiding, dus controleer bij problemen
   `diagnose debug cloudinit show` op de FortiGate. Lukt FortiFlex via cloud-init niet, dan activeert de
   controller het token alsnog met `execute vm-license`.
+- **FortiFlex via API** (Setup > Licentie): de controller regelt de licentie zelf, zoals in het SD-WAN &
+  FortiAI-lab. Je geeft een **API-gebruiker uit de FortiCloud IAM-portal** (met rechten op FortiFlex) op. Bij
+  het uitrollen maakt de controller de configuratie `<prefix>-ot-fgt` aan als die nog niet bestaat (FortiGate-VM met
+  de CPU's uit `fortigate.cores`, het service-pakket en de OT Security Service uit `fortiflex` in
+  `lab/topology.yaml`), maakt of hergebruikt hij een entitlement (gestopt: reactiveren; token gebruikt: nieuwe
+  token) en zet de token in de config drive. Bij het verwijderen van de FortiGate stopt hij de entitlement, zodat
+  er geen punten meer worden verbruikt. In de UI kun je de verbinding testen, de configuratie aanmaken en de
+  entitlement aanmaken, een nieuwe token geven, stoppen, reactiveren of ontkoppelen. De configuratienaam bevat
+  `ot`, zodat een configuratie van het SD-WAN-lab (`<prefix>-fgt`) nooit wordt hergebruikt. Parameters gelden bij
+  het aanmaken; pas een bestaande configuratie in het FortiFlex-portaal aan. De code voor de OT-dienst
+  (`FGTISSS`) volgt de FortiFlex-collecties van Fortinet; controleer hem bij de eerste keer *Configuratie aanmaken*.
 - **Zonder licentie** werken maar 3 interfaces (port1-3); het lab gebruikt er 7, dus een licentie is nodig.
 - **OT-signatures**: application control-ID's worden opgezocht in de FortiGuard-database van de
   FortiGate (`/api/v2/cmdb/application/name`). Zonder actieve OT-licentie en een FortiGuard-update vindt
@@ -242,9 +258,9 @@ met een echte FortiGate-VM gedraaid**. Controleer bij de eerste uitrol vooral:
 De controller is een git-checkout in `/opt/otlab`; instellingen, uploads, de API-key en testresultaten
 staan in `data/` (niet in git) en blijven bij een update behouden. Het draaiende lab wordt niet aangeraakt.
 
-- **Web UI → Updates**: *Controleren op updates* toont de nieuwe commits, *Nu bijwerken* haalt ze op, werkt
-  de Python-dependencies bij en herstart de controller. De pagina laadt daarna vanzelf opnieuw. Er verschijnt
-  een blauwe stip bij *Updates* als er een nieuwe versie is.
+- **Web UI → Updates** (klik op de versie rechtsboven): *Controleren op updates* toont de nieuwe commits,
+  *Nu bijwerken* haalt ze op, werkt de Python-dependencies bij en herstart de controller. De pagina laadt daarna
+  vanzelf opnieuw. Er verschijnt een blauwe stip bij de versie als er een nieuwe versie is.
 - **Vanaf de Proxmox host**: draai de installer-oneliner opnieuw. Die herkent een bestaande controller en
   biedt *Bijwerken* aan (onbeheerd: `OTLAB_UPDATE=1`). Gebruik dit ook voor controllers van vóór deze
   update-functie: die hebben nog geen `update.sh`.
